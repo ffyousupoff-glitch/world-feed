@@ -1,0 +1,12 @@
+{
+    "display_name": "Лента мира (Reddit)",
+    "loading_order": 120,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "ffyousupoff-glitch",
+    "version": "1.4.0",
+    "auto_update": true,
+    "homePage": "https://github.com/ffyousupoff-glitch/world-feed"
+}
