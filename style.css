@@ -1,6 +1,8 @@
 /* Лента мира — тёмный Reddit (old-new reddit ~2019) */
 .wf-root {
-    position: fixed; inset: 0; z-index: 10050;
+    /* Не inset:0 — на мобильных ST делает body position:fixed, а у html стоит transform,
+       и fixed-окно считается от html нулевой высоты (окно h=0, чёрный экран). */
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; z-index: 10050;
     background: rgba(0, 0, 0, .6);
     display: flex; align-items: center; justify-content: center;
     --wf-bg: #030303; --wf-card: #1a1a1b; --wf-card2: #272729; --wf-line: #343536;
@@ -38,7 +40,46 @@
 .wf-body { flex: 1; display: flex; gap: 22px; padding: 18px 20px; overflow: hidden; }
 .wf-feed { flex: 1; overflow-y: auto; min-width: 0; padding-right: 4px; }
 .wf-side { width: 290px; flex-shrink: 0; overflow-y: auto; }
-@media (max-width: 800px) { .wf-side { display: none; } .wf-body { padding: 10px; } .wf-browser { width: 100vw; height: 100dvh; border-radius: 0; } }
+@media (max-width: 800px) {
+    .wf-side { display: none; }
+    .wf-body { padding: 8px; gap: 0; }
+    .wf-browser { width: 100%; height: 100%; border-radius: 0; border: 0;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); box-sizing: border-box; }
+    .wf-chrome { padding: 4px 6px; gap: 6px; }
+    .wf-dots { display: none; }
+    .wf-close { font-size: 20px; padding: 6px 14px; background: #3c3c3f; border-radius: 6px; }
+    .wf-topbar { padding: 6px 8px; gap: 6px; }
+    .wf-logo { font-size: 16px; }
+    .wf-snoo { width: 24px; height: 24px; font-size: 14px; }
+    .wf-sort { order: 3; flex: 1 0 100%; overflow-x: auto; }
+    .wf-sort button { padding: 6px 10px; white-space: nowrap; }
+    .wf-refresh { flex: 1; padding: 8px 10px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .wf-root .wf-set .wf-prompt { font-size: 13px !important; }
+    .wf-logo small { display: none; }
+    .wf-vote button { font-size: 18px; padding: 6px 8px; min-width: 32px; }
+    .wf-post > .wf-vote { gap: 0; }
+    .wf-p-head .wf-muted { flex-basis: 100%; }
+    .wf-gear { padding: 8px 10px; }
+    .wf-post > .wf-vote { width: 34px; }
+    .wf-title { font-size: 16px; }
+    .wf-p-actions button, .wf-c-actions > button { padding: 8px 8px; }
+    .wf-c-body { padding-left: 8px; }
+    .wf-c-actions { padding-left: 2px; }
+    .wf-reply-slot { padding-left: 4px; }
+    .wf-c-line { width: 10px; }
+    .wf-c-line::after { left: 4px; }
+    .wf-feed, .wf-settings-page { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+    .wf-settings-page { padding: 10px 8px; }
+    .wf-grid { grid-template-columns: 1fr; }
+    .wf-prompt { min-height: 160px; max-height: 45vh; }
+    .wf-root .wf-set input, .wf-root .wf-set select, .wf-root .wf-set textarea, .wf-composer textarea { font-size: 16px !important; } /* без автозума iOS */
+}
+/* ST на телефоне ставит body{touch-action:none} — возвращаем прокрутку внутри окна */
+.wf-root, .wf-root * { touch-action: pan-x pan-y; }
+.wf-root textarea, .wf-root input { touch-action: auto; }
+/* Мобильная «шапка-возврат» на странице настроек */
+.wf-set-back { display: none; }
+@media (max-width: 800px) { .wf-gear.on { display: none; } .wf-set-back { display: block; position: sticky; top: -10px; z-index: 2; margin: -10px -8px 10px; padding: 8px; background: var(--wf-bg); border-bottom: 1px solid var(--wf-line); } }
 
 .wf-post { display: flex; background: var(--wf-card); border: 1px solid var(--wf-line); border-radius: 6px; margin-bottom: 12px; overflow: hidden; }
 .wf-post:hover { border-color: #818384; }
@@ -143,6 +184,8 @@
     background: #ff4500; color: #fff; display: none;
 }
 @media (max-width: 600px) { #wf_fab { bottom: 212px; } }
+@media (max-width: 380px) { .wf-gear { font-size: 0; padding: 8px 12px; } .wf-gear::before { content: "⚙"; font-size: 16px; } .wf-gear.on::before { content: "←"; } }
+#wf_fab { touch-action: none; }
 
 /* ── страница настроек в окне ── */
 .wf-gear { background: transparent; border: 1px solid var(--wf-line); border-radius: 20px; padding: 5px 14px; font-weight: 700; color: var(--wf-text); }

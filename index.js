@@ -35,6 +35,8 @@
         systemPrompt: '',      // пусто = стандартный
         includeCard: true,
         historyMaxChars: 30000, // 0 = без лимита
+        blockPlayer: true,      // персонаж игрока не пишет в ленту
+        playerAliases: '',      // другие имена персонажа игрока через запятую
     };
     const SETTINGS_VERSION = 4;
 
@@ -172,7 +174,7 @@
 - Персонажи сохраняют СВОИ характеры и знания: гордый остаётся гордым, но в формате коммента. Отсылки к реальным событиям последних сообщений ролевой игры обязательны — лента реагирует на то, что произошло (слухи, сплетни, искажения, хайп).
 - Не пересказывай чат: комментаторы знают о событиях из слухов, могут ошибаться и спорить.
 - Язык текста: {{language}}. Ники и названия сабов — латиницей.
-- Персонаж игрока ({{user}}) может упоминаться в третьем лице, но не пишет сам.`;
+- Персонаж игрока ({{user}}) НЕ пишет в ленту: ни постов, ни комментариев от его имени, под любым ником. О нём можно только говорить в третьем лице.`;
 
     const COMMENT_SCHEMA = `{"author":"ник","flair":"короткий флер или пусто","body":"текст","score":число,"replies":[ ...такие же объекты, вложенность до 2 уровней... ]}`;
 
@@ -255,6 +257,13 @@ ${g.chars}`;
         return `${base} Без фансервиса: люди полностью одеты по ситуации, обычное телосложение.`;
     }
 
+    /** Явный запрет с именами — дописывается к любому промту, даже пользовательскому. */
+    function playerRule() {
+        if (cfg().blockPlayer === false) return '';
+        const names = [ctx().name1, ...String(cfg().playerAliases || '').split(/[,;\n]/)].map(x => x.trim()).filter(Boolean);
+        return `\nВАЖНО: ${names.join(' / ')} — персонаж ИГРОКА. Он не автор: никаких постов и комментариев от его лица и ников, похожих на его имена (${names.map(n => translit(n).replace(/\s+/g, '_')).join(', ')} и т.п.). Его комменты появляются в ленте только когда игрок пишет их сам.\n`;
+    }
+
     function postsPrompt() {
         const s = cfg();
         const f = feed();
@@ -267,7 +276,7 @@ ${recent ? `## Уже опубликовано (не повторяй темы)\
 У каждого поста ${s.commentsPerPost} комментариев верхнего уровня, ответы на них — редко и коротко.
 ДЛИНА СТРОГО: текст поста не длиннее ${s.maxPostChars} символов (лучше короче, многие посты — 1–2 строки или только заголовок), каждый комментарий не длиннее ${s.maxCommentChars} символов. Это соцсеть, а не летопись: никаких полотен, списков на десять пунктов и пересказов.
 ${imageGuidance()}
-
+${playerRule()}
 Ответь ТОЛЬКО JSON без пояснений:
 {"posts":[{"sub":"название сабреддита","author":"ник","flair":"флер поста или пусто","title":"заголовок","body":"текст поста (может быть пустым, если пост-картинка)","image_prompt":"...","score":число,"comments":[${COMMENT_SCHEMA}]}]}`;
     }
@@ -289,7 +298,7 @@ ${threadToText(post.comments) || '(пока нет)'}
 
 ## Задание
 Добавь ещё ${cfg().commentsPerPost} комментариев (каждый не длиннее ${cfg().maxCommentChars} символов): новые люди заходят в тред, отвечают на существующие комменты (особенно на комменты u/${ctx().name1}, если есть — ответь каждому), разгоняют срач или мем.
-Ответь ТОЛЬКО JSON:
+${playerRule()}Ответь ТОЛЬКО JSON:
 {"new":[${COMMENT_SCHEMA}],"replies":[{"to":"точный ник автора, которому отвечают","to_text":"первые слова его коммента","comment":${COMMENT_SCHEMA}}]}`;
     }
 
@@ -397,8 +406,56 @@ ${threadToText(post.comments) || '(пока нет)'}
         return (at > max * 0.6 ? cut.slice(0, at + 1) : cut.replace(/\s+\S*$/, '')) + '…';
     }
 
-    function normComment(c) {
+    // ---------- персонаж игрока не пишет в ленту ----------
+
+    const TRANSLIT = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+    const translit = s => String(s).toLowerCase().replace(/[а-яё]/g, ch => TRANSLIT[ch] ?? ch);
+    const fold = s => translit(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+    /** Имена персонажа игрока: имя персоны + «другие имена» из настроек. */
+    function playerAliases() {
+        const raw = [ctx().name1, ...String(cfg().playerAliases || '').split(/[,;\n]/)];
+        const out = new Set();
+        for (const r of raw) {
+            const f = fold(r);
+            if (f.length >= 3 && !['user', 'you', 'anon', 'player'].includes(f)) out.add(f);
+        }
+        return [...out];
+    }
+
+    /** Ник похож на персонажа игрока? Сравнение по целым частям ника: Kano_Regent, maglor.official, u/Канафинвэ. */
+    function isPlayerNick(nick, aliases = playerAliases()) {
+        const f = ' ' + fold(String(nick).replace(/([a-z])([A-Z])/g, '$1 $2')) + ' ';
+        const glued = f.replace(/ /g, '');
+        return aliases.some(a => f.includes(' ' + a + ' ') || (a.length >= 5 && glued.includes(a.replace(/ /g, ''))));
+    }
+
+    let dropped = 0;
+
+    /** Чистит уже сохранённую ленту от записей «от лица» игрока (свои комменты игрока — mine — не трогает). */
+    function purgePlayer() {
+        const f = feed();
+        if (!f || cfg().blockPlayer === false) return 0;
+        const aliases = playerAliases();
+        if (!aliases.length) return 0;
+        let n = 0;
+        const clean = list => (list || []).filter(c => {
+            if (!c.mine && isPlayerNick(c.author, aliases)) { n++; return false; }
+            c.replies = clean(c.replies);
+            return true;
+        });
+        f.posts = f.posts.filter(p => {
+            if (isPlayerNick(p.author, aliases)) { n++; return false; }
+            p.comments = clean(p.comments);
+            return true;
+        });
+        if (n) { save(); console.info(`[world-feed] из сохранённой ленты убрано записей игрока: ${n}`); }
+        return n;
+    }
+
+    function normComment(c, aliases) {
         if (!c || typeof c !== 'object') return null;
+        if (cfg().blockPlayer !== false && isPlayerNick(c.author, aliases)) { dropped++; return null; } // вместе с ответами на него
         const body = cap(c.body ?? c.text ?? '', cfg().maxCommentChars);
         if (!body) return null;
         return {
@@ -408,12 +465,14 @@ ${threadToText(post.comments) || '(пока нет)'}
             body,
             score: Number.isFinite(+c.score) ? Math.round(+c.score) : Math.floor(Math.random() * 300),
             ts: Date.now() - Math.floor(Math.random() * 3 * 3600e3),
-            replies: (Array.isArray(c.replies) ? c.replies : []).map(normComment).filter(Boolean),
+            replies: (Array.isArray(c.replies) ? c.replies : []).map(x => normComment(x, aliases)).filter(Boolean),
         };
     }
 
     function normPost(p) {
         if (!p || !String(p.title || '').trim()) return null;
+        const aliases = playerAliases();
+        if (cfg().blockPlayer !== false && isPlayerNick(p.author, aliases)) { dropped++; return null; }
         return {
             id: uid(),
             sub: normSub(p.sub),
@@ -425,7 +484,7 @@ ${threadToText(post.comments) || '(пока нет)'}
             ts: Date.now(),
             vote: 0,
             image: p.image_prompt && cfg().imageMode !== 'off' ? { prompt: String(p.image_prompt).trim(), src: '' } : null,
-            comments: (Array.isArray(p.comments) ? p.comments : []).map(normComment).filter(Boolean),
+            comments: (Array.isArray(p.comments) ? p.comments : []).map(x => normComment(x, aliases)).filter(Boolean),
         };
     }
 
@@ -439,7 +498,9 @@ ${threadToText(post.comments) || '(пока нет)'}
         try {
             const data = await ask(postsPrompt());
             if (ctx().getCurrentChatId?.() !== chatId) return;
+            dropped = 0;
             const posts = (Array.isArray(data) ? data : data.posts || []).map(normPost).filter(Boolean);
+            if (dropped) console.info(`[world-feed] убрано записей от лица персонажа игрока: ${dropped}`);
             if (!posts.length) throw new Error('в ответе нет постов');
             feed().posts.unshift(...posts);
             save();
@@ -482,15 +543,17 @@ ${threadToText(post.comments) || '(пока нет)'}
             const data = await ask(morePrompt(post));
             if (ctx().getCurrentChatId?.() !== chatId) return;
             let added = 0;
+            dropped = 0;
+            const aliases = playerAliases();
             for (const r of data.replies || []) {
-                const cm = normComment(r.comment);
+                const cm = normComment(r.comment, aliases);
                 if (!cm) continue;
                 const target = findComment(post.comments, r.to, r.to_text);
                 (target ? target.replies : post.comments).push(cm);
                 added++;
             }
             for (const n of data.new || []) {
-                const cm = normComment(n);
+                const cm = normComment(n, aliases);
                 if (cm) { post.comments.push(cm); added++; }
             }
             save();
@@ -631,8 +694,9 @@ ${threadToText(post.comments) || '(пока нет)'}
 </div>`);
         $('body').append($win);
 
-        $win.on('click', '.wf-close', close);
+        $win.on('click', '.wf-close', () => close());
         $win.on('click', function (e) { if (e.target === this) close(); });
+        $win.on('click', '.wf-set-back button', () => toggleSettings(false));
         $win.on('click', '.wf-refresh', refreshFeed);
         $win.on('click', '.wf-gear', () => toggleSettings());
         bindSettingsPage($win.find('.wf-settings-page'));
@@ -650,8 +714,25 @@ ${threadToText(post.comments) || '(пока нет)'}
         return $win;
     }
 
-    function open() { isOpen = true; setBadge(0); ensureWindow().fadeIn(120); render(); }
-    function close() { isOpen = false; $win?.fadeOut(120); }
+    // Кнопка «Назад» на телефоне: закрывает настройки, потом окно, а не уводит со страницы.
+    let historyArmed = false;
+    function armHistory() {
+        if (historyArmed) return;
+        try { history.pushState({ wf: 1 }, ''); historyArmed = true; } catch { /* sandbox */ }
+    }
+    window.addEventListener('popstate', () => {
+        if (!historyArmed) return;
+        historyArmed = false;
+        if (!isOpen) return;
+        if (settingsOpen) { toggleSettings(false); armHistory(); } else close(true);
+    });
+
+    function open() { isOpen = true; setBadge(0); purgePlayer(); ensureWindow().fadeIn(120); render(); armHistory(); }
+    function close(fromHistory) {
+        isOpen = false;
+        $win?.fadeOut(120);
+        if (historyArmed && fromHistory !== true) { historyArmed = false; try { history.back(); } catch { /* */ } }
+    }
 
     function sorted(posts) {
         const arr = posts.filter(p => !ui.sub || p.sub === ui.sub);
@@ -704,7 +785,7 @@ ${voteBox(p.score, p.vote, p.id)}
 <div class="wf-p-main">
   <div class="wf-p-head"><span class="wf-subicon" style="background:${avatarColor(p.sub)}">r/</span>
     <b data-sub="${esc(p.sub)}" class="wf-link">r/${esc(p.sub)}</b>
-    <span class="wf-muted">· Опубликовал u/${esc(p.author)} · ${ago(p.ts)}</span></div>
+    <span class="wf-muted">Опубликовал u/${esc(p.author)} · ${ago(p.ts)}</span></div>
   <h3 class="wf-title">${esc(p.title)}${p.flair ? ` <span class="wf-pflair">${esc(p.flair)}</span>` : ''}</h3>
   ${p.body ? `<div class="wf-p-body ${expanded ? '' : 'wf-clamp'}">${md(p.body)}</div>` : ''}
   ${isLong ? `<button class="wf-expand" data-act="expand" data-path="${p.id}">${expanded ? '▲ Свернуть пост' : '▼ Читать полностью'}</button>` : ''}
@@ -883,6 +964,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         const s = cfg();
         $p.html(`
 <div class="wf-set">
+  <div class="wf-set-back"><button class="wf-btn2">← К ленте</button></div>
   <section class="wf-card wf-set-card">
     <div class="wf-card-h">🔌 Подключение</div>
     <div class="wf-pad">
@@ -936,6 +1018,8 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
       <label class="wf-f">Последних сообщений чата<input data-s="historyMessages" type="number" min="1" max="300"></label>
       <label class="wf-f">Не больше символов (0 — без лимита)<input data-s="historyMaxChars" type="number" min="0" max="500000" step="1000"></label>
       <label class="wf-chk"><input type="checkbox" data-s="includeCard"> Карточка персонажа и персона</label>
+      <label class="wf-chk wf-span"><input type="checkbox" data-s="blockPlayer"> Персонаж игрока не пишет в ленту (посты и комменты от его ников удаляются)</label>
+      <label class="wf-f wf-span">Другие имена персонажа игрока, через запятую<input data-s="playerAliases" placeholder="напр.: Kano, Канафинвэ, Makalaurë"></label>
       <div class="wf-hint wf-span wf-ctx-est"></div>
     </div>
   </section>
@@ -969,7 +1053,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         $p.find('[data-show]').each(function () { this.style.display = this.dataset.show === conn ? '' : 'none'; });
     }
 
-    let estTimer = 0;
+    let estTimer = 0, purgeTimer = 0;
     function bindSettingsPage($p) {
         $p.on('input change', '[data-s]', function () {
             const s = cfg();
@@ -979,6 +1063,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             s[k] = v;
             ctx().saveSettingsDebounced();
             if (k === 'showFab') placeFab();
+            if (k === 'blockPlayer' || k === 'playerAliases') { clearTimeout(purgeTimer); purgeTimer = setTimeout(() => { const n = purgePlayer(); if (n) toastr.info(`Убрано записей от лица персонажа игрока: ${n}`, 'Лента мира'); }, 800); }
             if (['historyMessages', 'historyMaxChars', 'includeCard'].includes(k)) {
                 clearTimeout(estTimer);
                 estTimer = setTimeout(() => $p.find('.wf-ctx-est').text(contextEstimate()), 250);
@@ -1117,7 +1202,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);
