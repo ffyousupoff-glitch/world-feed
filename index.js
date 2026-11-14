@@ -78,6 +78,7 @@
         if (!md) return null;
         if (!md[META_KEY] || !Array.isArray(md[META_KEY].posts)) md[META_KEY] = { posts: [] };
         for (const p of md[META_KEY].posts) if (!p.net) p.net = 'reddit';
+        if (!Array.isArray(md[META_KEY].dms)) md[META_KEY].dms = [];
         return md[META_KEY];
     }
 
@@ -946,7 +947,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (cfg().net === net) return;
         cfg().net = net;
         ctx().saveSettingsDebounced();
-        ui.sub = ''; ui.tag = ''; ui.composing = false;
+        ui.sub = ''; ui.tag = ''; ui.composing = false; ui.dm = null; ui.dmView = false; // другая вкладка — другой сайт, открываем его ленту
         if (settingsOpen) toggleSettings(false);
         render();
         $win?.find('.wf-feed').scrollTop(0);
@@ -975,6 +976,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     <div class="wf-topbar">
       <span class="wf-logo"></span>
       <span class="wf-sort"></span>
+      <button class="wf-dm-btn" data-act="dmlist" title="Личные сообщения">✉ <span class="wf-dm-label">Сообщения</span><span class="wf-dm-badge"></span></button>
       <button class="wf-compose-btn" data-act="compose">✏ Пост</button>
       <button class="wf-refresh">⟳ Обновить ленту</button>
       <button class="wf-gear" title="Настройки ленты">⚙ Настройки</button>
@@ -1007,6 +1009,10 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         $win.on('click', '[data-sub]', function () { ui.sub = this.dataset.sub; render(); $win.find('.wf-feed').scrollTop(0); });
         $win.on('click', '.wf-spoiler', function () { $(this).toggleClass('wf-shown'); });
         $win.on('click', '[data-act]', onAction);
+        $win.on('keydown', '.wf-dm-input', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $win.find('[data-act="dmsend"]').trigger('click'); }
+        });
+        $win.on('keydown', '.wf-dm-to', function (e) { if (e.key === 'Enter') $win.find('[data-act="dmnew"]').trigger('click'); });
         $win.on('keydown', '.wf-reply-input', function (e) {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $(this).siblings('[data-act="send"]').trigger('click');
         });
@@ -1063,7 +1069,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
 <div class="wf-c-line" title="Свернуть" data-act="collapse" data-path="${postId}|${c.id}"></div>
 <div class="wf-c-main ${c.collapsed ? 'wf-collapsed' : ''}">
   <div class="wf-c-head"><span class="wf-ava" style="background:${avatarColor(c.author)}">${esc(c.author[0] || '?').toUpperCase()}</span>
-    <b class="${isUser ? 'wf-me' : ''}">u/${esc(c.author)}</b>${c.flair ? `<span class="wf-flair">${esc(c.flair)}</span>` : ''}
+    <b class="${isUser ? 'wf-me' : 'wf-dmable'}" ${isUser ? '' : dmAttr(c)}>u/${esc(c.author)}</b>${c.flair ? `<span class="wf-flair">${esc(c.flair)}</span>` : ''}
     <span class="wf-muted">· ${ago(c.ts)}</span>${c.collapsed ? `<span class="wf-muted"> [+${countComments(c.replies) + 1}]</span>` : ''}</div>
   ${c.collapsed ? '' : `<div class="wf-c-body">${md(c.body)}</div>
   <div class="wf-c-actions">${voteBox(c.score, c.vote, `${postId}|${c.id}`)}
@@ -1093,7 +1099,7 @@ ${voteBox(p.score, p.vote, p.id)}
 <div class="wf-p-main">
   <div class="wf-p-head"><span class="wf-subicon" style="background:${avatarColor(p.sub)}">r/</span>
     <b data-sub="${esc(p.sub)}" class="wf-link">r/${esc(p.sub)}</b>
-    <span class="wf-muted">Опубликовал u/${esc(p.author)} · ${ago(p.ts)}</span></div>
+    <span class="wf-muted">Опубликовал <span class="${p.mine ? '' : 'wf-dmable'}" ${p.mine ? '' : dmAttr(p)}>u/${esc(p.author)}</span> · ${ago(p.ts)}</span></div>
   <h3 class="wf-title">${esc(p.title)}${p.flair ? ` <span class="wf-pflair">${esc(p.flair)}</span>` : ''}</h3>
   ${p.body ? `<div class="wf-p-body ${expanded ? '' : 'wf-clamp'}">${md(p.body)}</div>` : ''}
   ${isLong ? `<button class="wf-expand" data-act="expand" data-path="${p.id}">${expanded ? '▲ Свернуть пост' : '▼ Читать полностью'}</button>` : ''}
@@ -1123,7 +1129,7 @@ ${voteBox(p.score, p.vote, p.id)}
     }
 
     function twHead(c) {
-        return `<span class="wf-tw-name ${c.mine ? 'wf-me' : ''}">${esc(c.name || c.author)}</span>${c.verified ? '<span class="wf-tw-check" title="verified">✓</span>' : ''}
+        return `<span class="wf-tw-name ${c.mine ? 'wf-me' : 'wf-dmable'}" ${c.mine ? '' : dmAttr(c)}>${esc(c.name || c.author)}</span>${c.verified ? '<span class="wf-tw-check" title="verified">✓</span>' : ''}
 <span class="wf-muted">@${esc(c.author)} · ${ago(c.ts)}</span>`;
     }
 
@@ -1188,7 +1194,7 @@ ${im.error ? `<small class="wf-err">${esc(im.error)}</small>` : ''}<u>${im.auto 
     function igCommentHtml(c, postId) {
         const path = `${postId}|${c.id}`;
         return `<div class="wf-ig-c" data-cid="${c.id}">${twAva(c.name || c.author)}
-<div class="wf-tw-main"><div><b class="${c.mine ? 'wf-me' : ''}">${esc(c.author)}</b>${c.verified ? '<span class="wf-tw-check">✓</span>' : ''} ${twText(c.body)}</div>
+<div class="wf-tw-main"><div><b class="${c.mine ? 'wf-me' : 'wf-dmable'}" ${c.mine ? '' : dmAttr(c)}>${esc(c.author)}</b>${c.verified ? '<span class="wf-tw-check">✓</span>' : ''} ${twText(c.body)}</div>
 <div class="wf-ig-cmeta"><span>${ago(c.ts)}</span><span>${fmtScore((c.score || 0) + (c.vote > 0 ? 1 : 0))} отметок «Нравится»</span>
 <button data-act="reply" data-path="${path}">Ответить</button><button data-act="delc" data-path="${path}" title="Удалить">🗑</button></div>
 <div class="wf-reply-slot"></div>
@@ -1202,7 +1208,7 @@ ${(c.replies || []).map(r => igCommentHtml(r, postId)).join('')}</div>
         const liked = p.vote > 0;
         return `<article class="wf-ig" data-pid="${p.id}">
 <div class="wf-ig-head"><span class="wf-ig-ring">${twAva(p.name || p.author)}</span>
-  <div class="wf-ig-who"><b class="${p.mine ? 'wf-me' : ''}">${esc(p.author)}</b>${p.verified ? '<span class="wf-tw-check">✓</span>' : ''}<span class="wf-muted"> · ${ago(p.ts)}</span>${p.location ? `<br><small>${esc(p.location)}</small>` : ''}</div>
+  <div class="wf-ig-who"><b class="${p.mine ? 'wf-me' : 'wf-dmable'}" ${p.mine ? '' : dmAttr(p)}>${esc(p.author)}</b>${p.verified ? '<span class="wf-tw-check">✓</span>' : ''}<span class="wf-muted"> · ${ago(p.ts)}</span>${p.location ? `<br><small>${esc(p.location)}</small>` : ''}</div>
   <button class="wf-ig-more" data-act="delp" data-path="${p.id}" title="Удалить пост">🗑</button></div>
 ${igImage(p)}
 <div class="wf-ig-actions">
@@ -1243,6 +1249,128 @@ ${[...seen.values()].slice(0, 20).map(p => `<div class="wf-ig-story ${ui.tag ===
 <div class="wf-card wf-pad wf-muted">🔌 текст: ${esc(connLabel('insta'))}<br>🖼 фото: ${esc(imageLabel(hiCfgCache))}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
 <div class="wf-card wf-muted wf-pad">Лента в промпт ролевой игры не попадает. Хранится в этом чате.
 <br><br><button class="wf-linkbtn" data-act="clear">Очистить Инстаграм этого чата</button></div>`;
+    }
+
+    // ---------- личные сообщения ----------
+
+    const DM_NAMES = { reddit: 'Чат Reddit', twitter: 'Сообщения X', insta: 'Direct' };
+    const dmBusy = new Set();
+
+    function dmAttr(x) {
+        return `data-act="dm" data-path="${esc(x.author)}" data-name="${esc(x.name || x.author)}" title="Написать в личку"`;
+    }
+
+    function dmList(net = netOf()) { return (feed()?.dms || []).filter(t => t.net === net); }
+
+    function dmFind(net, handle) {
+        const h = String(handle).toLowerCase();
+        return (feed()?.dms || []).find(t => t.net === net && t.handle.toLowerCase() === h);
+    }
+
+    function dmOpen(handle, name) {
+        const f = feed();
+        if (!f) return toastr.info('Сначала открой чат.', 'Лента мира');
+        const net = netOf();
+        handle = isSocial(net) ? normHandle(handle) : normUser(handle);
+        if (cfg().blockPlayer !== false && isPlayerNick(handle)) return toastr.info('Это твой же персонаж — себе не пишут.', 'Лента мира');
+        let t = dmFind(net, handle);
+        if (!t) { t = { id: uid(), net, handle, name: String(name || handle).slice(0, 50), msgs: [], unread: 0, ts: Date.now() }; f.dms.unshift(t); save(); }
+        ui.dm = t.id; ui.dmView = true; ui.composing = false;
+        t.unread = 0;
+        render();
+        setTimeout(() => $win?.find('.wf-dm-input').trigger('focus'), 30);
+    }
+
+    /** Что этот аккаунт писал в ленте — чтобы в личке он говорил своим голосом. */
+    function dmVoice(t) {
+        const out = [];
+        const h = t.handle.toLowerCase();
+        const walk = (list, where) => { for (const c of list || []) { if (String(c.author).toLowerCase() === h) out.push(`- (коммент под «${where}») ${c.body}`); walk(c.replies, where); } };
+        for (const p of feed().posts.filter(x => x.net === t.net)) {
+            const where = String(p.title || p.body || '').slice(0, 50);
+            if (String(p.author).toLowerCase() === h) out.push(`- (пост) ${p.title ? p.title + ' — ' : ''}${String(p.body || '').slice(0, 200)}`);
+            walk(p.comments, where);
+        }
+        return out.slice(0, 8).join('\n');
+    }
+
+    function dmPrompt(t) {
+        const me = ctx().name1 || 'игрок';
+        const net = { reddit: 'личный чат Reddit', twitter: 'личные сообщения Твиттера (X)', insta: 'Direct Инстаграма' }[t.net];
+        const hist = t.msgs.slice(-30).map(m => `${m.from === 'me' ? me : '@' + t.handle}: ${m.text}`).join('\n');
+        const voice = dmVoice(t);
+        return `${worldContext({ lite: true })}
+
+## Собеседник
+${t.name} (@${t.handle}) — житель этого мира со своим характером, знаниями и интересами. Если это канонический персонаж или герой ролевой игры — он говорит в своём характере.
+${voice ? `Что он публиковал в ленте (его голос и позиция):\n${voice}\n` : ''}
+## Переписка (${net})
+${hist}
+
+## Задание
+Ты отвечаешь ТОЛЬКО за @${t.handle}. Напиши его ответ на последние сообщения ${me}. Это личка, а не публичная лента: можно быть откровеннее, грубее, флиртовать, торговаться, врать, уходить от ответа — как этот персонаж сделал бы с этим собеседником. Стиль — живой мессенджер: 1–3 коротких сообщения подряд, без описаний действий, без ремарок, без кавычек. Не пиши за ${me}.
+Ответь ТОЛЬКО JSON: {"messages":["первое сообщение","второе (если нужно)"]}`;
+    }
+
+    async function dmSend(text) {
+        const t = (feed()?.dms || []).find(x => x.id === ui.dm);
+        if (!t) return;
+        text = String(text || '').trim();
+        if (text) t.msgs.push({ from: 'me', text, ts: Date.now() });
+        if (!t.msgs.length || t.msgs.at(-1).from !== 'me') return;
+        t.ts = Date.now(); save();
+        if (dmBusy.has(t.id)) { render(); return; }
+        const chatId = ctx().getCurrentChatId?.();
+        dmBusy.add(t.id); render();
+        try {
+            const raw = await callModel(dmSystem(t.net), dmPrompt(t), 1200, t.net);
+            if (ctx().getCurrentChatId?.() !== chatId) return;
+            let msgs = [];
+            try { const j = parseJson(raw); msgs = Array.isArray(j) ? j : (j.messages || j.replies || []); }
+            catch { msgs = [String(raw).replace(/<think>[\s\S]*?<\/think>/gi, '').trim()]; } // модель ответила просто текстом — тоже годится
+            msgs = msgs.map(m => cap(typeof m === 'string' ? m : m?.text, 600)).filter(Boolean).slice(0, 4);
+            if (!msgs.length) throw new Error('пустой ответ');
+            const base = Date.now();
+            msgs.forEach((m, i) => t.msgs.push({ from: 'them', text: m, ts: base + i }));
+            t.ts = Date.now();
+            if (!(isOpen && ui.dmView && ui.dm === t.id)) { t.unread = (t.unread || 0) + msgs.length; toastr.info(esc(msgs[0]).slice(0, 120), `✉ @${t.handle}`); }
+            save();
+        } catch (e) {
+            console.error('[world-feed] dm', e);
+            toastr.error(errText(e), 'Сообщение не доставлено', { timeOut: 10000 });
+        } finally { dmBusy.delete(t.id); render(); }
+    }
+
+    /** Системный промт лички: правила соцсети + запрет писать за игрока. */
+    function dmSystem(net) {
+        return `${styleRules(net)}\n\nСейчас ты ведёшь не ленту, а ЛИЧНУЮ переписку одного аккаунта с игроком. Отвечай только за этот аккаунт.${playerRule()}`;
+    }
+
+    function dmUnreadTotal(net = netOf()) { return dmList(net).reduce((n, t) => n + (t.unread || 0), 0); }
+
+    function dmHtml() {
+        const list = dmList().slice().sort((a, b) => b.ts - a.ts);
+        const t = list.find(x => x.id === ui.dm);
+        const tw = netOf();
+        const listHtml = `<div class="wf-dm-list">
+  <div class="wf-dm-h"><b>${DM_NAMES[tw]}</b><button class="wf-linkbtn wf-x" data-act="dmclose" title="К ленте">✕</button></div>
+  <div class="wf-dm-new"><input class="wf-dm-to" placeholder="${isSocial(tw) ? '@ник' : 'u/ник'} — написать новому"><button class="wf-btn2" data-act="dmnew">→</button></div>
+  ${list.map(x => `<div class="wf-dm-item ${x.id === ui.dm ? 'on' : ''}" data-act="dmgo" data-path="${x.id}">
+    ${twAva(x.name || x.handle)}<div class="wf-dm-meta"><b>${esc(x.name)}</b> <span class="wf-muted">@${esc(x.handle)}</span><br>
+    <small class="wf-muted">${esc(x.msgs.at(-1)?.from === 'me' ? 'Вы: ' : '')}${esc(String(x.msgs.at(-1)?.text || 'нет сообщений').slice(0, 40))}</small></div>
+    ${x.unread ? `<span class="wf-dm-unread">${x.unread}</span>` : ''}</div>`).join('') || '<div class="wf-pad wf-muted">Переписок нет. Нажми на имя любого автора в ленте — или впиши ник выше.</div>'}
+</div>`;
+        const chatHtml = t ? `<div class="wf-dm-chat">
+  <div class="wf-dm-h"><button class="wf-linkbtn wf-dm-back" data-act="dmback" title="К перепискам">←</button>${twAva(t.name || t.handle)}<div><b>${esc(t.name)}</b><br><small class="wf-muted">@${esc(t.handle)}</small></div>
+    <span style="flex:1"></span><button class="wf-linkbtn" data-act="dmdel" data-path="${t.id}" title="Удалить переписку">🗑</button></div>
+  <div class="wf-dm-msgs">${t.msgs.map((m, i) => `<div class="wf-dm-msg ${m.from === 'me' ? 'me' : 'them'}"><span>${twText(m.text)}</span>
+    <button class="wf-dm-x" data-act="dmdelmsg" data-path="${t.id}|${i}" title="Удалить сообщение">✕</button></div>`).join('')
+    || `<div class="wf-muted wf-pad">Начни разговор с @${esc(t.handle)}.</div>`}
+    ${dmBusy.has(t.id) ? '<div class="wf-dm-msg them wf-typing"><span>печатает<i>.</i><i>.</i><i>.</i></span></div>' : ''}</div>
+  <div class="wf-dm-send"><textarea class="wf-dm-input" rows="1" placeholder="Сообщение… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <button class="wf-btn" data-act="dmsend">➤</button></div>
+</div>` : '<div class="wf-dm-chat wf-dm-empty wf-muted">Выбери переписку слева.</div>';
+        return `<div class="wf-dm ${t ? 'has-chat' : ''}">${listHtml}${chatHtml}</div>`;
     }
 
     /** Форма своего поста: на Реддите — по кнопке «✏ Пост», в Твиттере — всегда сверху ленты. */
@@ -1376,7 +1504,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         $win.find('.wf-tab[data-net="reddit"] .wf-tab-t').text(ui.sub && !tw ? `r/${ui.sub}` : 'Reddit — главная мира');
         $win.find('.wf-tab[data-net="twitter"] .wf-tab-t').text(ui.tag && tw ? `${ui.tag} — поиск / X` : 'Главная / X');
         $win.find('.wf-tab').each(function () {
-            const n = this.dataset.net === netOf() ? 0 : (unseen[this.dataset.net] || 0);
+            const n = this.dataset.net === netOf() ? 0 : (unseen[this.dataset.net] || 0) + dmUnreadTotal(this.dataset.net);
             $(this).find('.wf-tab-badge').text(n || '').toggle(!!n);
         });
         unseen[netOf()] = 0;
@@ -1403,6 +1531,18 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             : tw
             ? `<div class="wf-empty">𝕏<br>Тишина в ленте.<br>Нажми «Обновить ленту» — и мир начнёт твитить о том, что у вас стряслось.</div>`
             : `<div class="wf-empty">👽<br>Здесь пока пусто.<br>Нажми «Обновить ленту» — и жители мира начнут обсуждать, что у вас стряслось.</div>`;
+        const totalUnread = dmUnreadTotal();
+        $win.find('.wf-dm-btn').toggleClass('on', !!ui.dmView).find('.wf-dm-badge').text(totalUnread || '').toggle(!!totalUnread);
+        $win.find('.wf-dm-label').text(DM_NAMES[net]);
+        if (ui.dmView) {
+            const draft = $win.find('.wf-dm-input').val();
+            $feed.html(dmHtml());
+            $win.find('.wf-side').html(ig ? igSideHtml(mine) : tw ? trendsHtml(mine) : sideHtml(mine));
+            $win.find('.wf-dm-input').val(draft || '');
+            const box = $win.find('.wf-dm-msgs')[0]; if (box) box.scrollTop = box.scrollHeight;
+            $win.find('#wf_url_sub').text(ig ? 'direct/inbox/' : tw ? 'messages' : 'chat');
+            return;
+        }
         $feed.html((ig ? storiesHtml(mine) : '') + composerHtml(f.posts) + (posts.length ? posts.map(ig ? igHtml : tw ? tweetHtml : postHtml).join('') : empty));
         $win.find('.wf-side').html(ig ? igSideHtml(mine) : tw ? trendsHtml(mine) : sideHtml(mine));
         if (ig) watchAutoImages();
@@ -1440,6 +1580,19 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 target.vote = target.vote === v ? 0 : v;
                 break;
             }
+            case 'dm': return dmOpen(this.dataset.path, this.dataset.name);
+            case 'dmlist': ui.dmView = !ui.dmView; if (ui.dmView && !dmList().some(x => x.id === ui.dm)) ui.dm = null; render(); return;
+            case 'dmback': ui.dm = null; render(); return;
+            case 'dmclose': ui.dmView = false; render(); return;
+            case 'dmgo': { ui.dm = path; const t = dmList().find(x => x.id === path); if (t) { t.unread = 0; save(); } render(); setTimeout(() => $win.find('.wf-dm-input').trigger('focus'), 30); return; }
+            case 'dmnew': { const v = String($win.find('.wf-dm-to').val() || '').replace(/^(@|\/?u\/)/, '').trim(); if (v) dmOpen(v, v); return; }
+            case 'dmsend': { const $ta = $win.find('.wf-dm-input'); const v = $ta.val(); $ta.val(''); return dmSend(v); }
+            case 'dmdel': {
+                const ok = await ctx().Popup.show.confirm('Удалить переписку?', '');
+                if (!ok) return;
+                const f = feed(); f.dms = f.dms.filter(x => x.id !== path); ui.dm = null; break;
+            }
+            case 'dmdelmsg': { const [id, i] = String(path).split('|'); const t = feed().dms.find(x => x.id === id); if (t) t.msgs.splice(Number(i), 1); break; }
             case 'compose':
                 ui.composing = !ui.composing;
                 render();
@@ -1889,14 +2042,14 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         mountMenu();
         mountFab();
         const c = ctx();
-        c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => { ui.open.clear(); ui.sub = ''; ui.tag = ''; ui.composing = false; render(); });
+        c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => { ui.open.clear(); ui.sub = ''; ui.tag = ''; ui.composing = false; ui.dmView = false; ui.dm = null; render(); });
         try {
             c.SlashCommandParser?.addCommandObject?.(c.SlashCommand.fromProps({
                 name: 'feed', helpString: 'Открыть ленту мира (Reddit / Twitter).',
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, dmOpen, dmSend, dmPrompt, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);

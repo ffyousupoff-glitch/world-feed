@@ -371,3 +371,52 @@
 .wf-ig-save.on { filter: none; opacity: 1; }
 
 .wf-sub-h { font-weight: 700; font-size: 13px; color: var(--wf-text); margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--wf-line); }
+
+
+/* ── личные сообщения ── */
+.wf-dmable { cursor: pointer; }
+.wf-dmable:hover { text-decoration: underline; }
+.wf-dm-btn { position: relative; background: transparent; border: 1px solid var(--wf-line); border-radius: 20px; padding: 5px 14px; font-weight: 700; color: var(--wf-text); white-space: nowrap; }
+.wf-dm-btn.on, .wf-dm-btn:hover { background: var(--wf-card2); }
+.wf-dm-badge { display: none; position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: #ff3040; color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.wf-dm { display: flex; height: 100%; min-height: 420px; border: 1px solid var(--wf-line); border-radius: 8px; overflow: hidden; background: var(--wf-card); }
+.wf-tw .wf-dm { border-radius: 0; border-width: 0; }
+.wf-dm-list { width: 260px; flex-shrink: 0; border-right: 1px solid var(--wf-line); overflow-y: auto; }
+.wf-dm-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--wf-line); }
+.wf-dm-h .wf-x { margin-left: auto; }
+.wf-dm-new { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--wf-line); }
+.wf-dm-new input { flex: 1; min-width: 0; background: var(--wf-bg); color: var(--wf-text); border: 1px solid var(--wf-line); border-radius: 16px; padding: 5px 12px; font: inherit; font-size: 13px; }
+.wf-dm-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; }
+.wf-dm-item:hover, .wf-dm-item.on { background: var(--wf-card2); }
+.wf-dm-meta { flex: 1; min-width: 0; font-size: 13px; line-height: 1.3; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wf-dm-unread { background: #0095f6; color: #fff; border-radius: 10px; min-width: 18px; padding: 0 5px; font-size: 11px; text-align: center; line-height: 18px; }
+.wf-dm-chat { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wf-dm-empty { align-items: center; justify-content: center; }
+.wf-dm-msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+.wf-dm-msg { display: flex; align-items: center; gap: 6px; max-width: 78%; }
+.wf-dm-msg span { padding: 8px 12px; border-radius: 18px; background: var(--wf-card2); word-wrap: break-word; white-space: pre-wrap; font-size: 14px; }
+.wf-dm-msg.me { align-self: flex-end; flex-direction: row-reverse; }
+.wf-dm-msg.me span { background: #0084ff; color: #fff; }
+.wf-tw .wf-dm-msg.me span { background: #1d9bf0; }
+.wf-igm .wf-dm-msg.me span { background: linear-gradient(135deg, #a033ff, #0084ff); }
+:not(.wf-tw) > .wf-browser .wf-dm-msg.me span { background: #ff4500; }
+.wf-dm-x { visibility: hidden; background: transparent; border: 0; color: var(--wf-muted); font-size: 11px; }
+.wf-dm-msg:hover .wf-dm-x { visibility: visible; }
+.wf-typing i { animation: wf-blink 1.2s infinite; font-style: normal; } .wf-typing i:nth-child(2) { animation-delay: .2s; } .wf-typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes wf-blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+.wf-dm-send { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--wf-line); align-items: flex-end; }
+.wf-dm-send textarea { flex: 1; resize: none; max-height: 120px; min-height: 38px; background: var(--wf-bg); color: var(--wf-text); border: 1px solid var(--wf-line); border-radius: 19px; padding: 8px 14px; font: inherit; }
+.wf-dm-send textarea:focus { outline: none; border-color: var(--wf-blue); }
+.wf-dm-send .wf-btn { border-radius: 50%; width: 38px; height: 38px; padding: 0; }
+.wf-tw .wf-feed:has(.wf-dm) { max-width: 760px; }
+@media (max-width: 800px) {
+    .wf-dm-label { display: none; }
+    .wf-dm-btn { padding: 8px 10px; }
+    .wf-dm { min-height: calc(100dvh - 190px); }
+    .wf-dm-list { width: 100%; border-right: 0; }
+    .wf-dm.has-chat .wf-dm-list { display: none; }
+    .wf-dm:not(.has-chat) .wf-dm-chat { display: none; }
+    .wf-dm-send textarea { font-size: 16px; }
+}
+.wf-dm-back { display: none; color: var(--wf-text) !important; font-size: 18px; }
+@media (max-width: 800px) { .wf-dm-back { display: inline-block; } }
