@@ -1,4 +1,4 @@
-// Лента мира — окно-«Reddit» для ролевого мира. Посты и комментарии пишут
+// Лента мира — окно-«Reddit» и «Twitter» для ролевого мира. Посты и комментарии пишут
 // персонажи игромира интернет-сленгом. В промпт ролевой игры НЕ попадает.
 // Данные: chatMetadata.worldFeed (у каждого чата своя лента).
 
@@ -37,6 +37,9 @@
         historyMaxChars: 30000, // 0 = без лимита
         blockPlayer: true,      // персонаж игрока не пишет в ленту
         playerAliases: '',      // другие имена персонажа игрока через запятую
+        net: 'reddit',          // открытая вкладка: reddit | twitter
+        systemPromptTw: '',     // пусто = стандартный промт Твиттера
+        autoReplies: true,      // на свой пост сразу приходят ответы
     };
     const SETTINGS_VERSION = 4;
 
@@ -65,6 +68,7 @@
         const md = ctx().chatMetadata;
         if (!md) return null;
         if (!md[META_KEY] || !Array.isArray(md[META_KEY].posts)) md[META_KEY] = { posts: [] };
+        for (const p of md[META_KEY].posts) if (!p.net) p.net = 'reddit';
         return md[META_KEY];
     }
 
@@ -112,6 +116,8 @@
     }
 
     const normUser = a => (String(a || 'anon').trim().replace(/^\/?u\//i, '') || 'anon');
+    const normHandle = a => (String(a || 'anon').trim().replace(/^@+/, '').replace(/\s+/g, '_') || 'anon');
+    const netOf = () => (cfg().net === 'twitter' ? 'twitter' : 'reddit');
     const normSub = s => (String(s || 'world').trim().replace(/^\/?r\//i, '').replace(/\s+/g, '_') || 'world');
 
     // ---------- контекст для модели ----------
@@ -156,10 +162,12 @@
         return parts.join('\n\n');
     }
 
-    function styleRules() {
+    function styleRules(net = netOf()) {
         const s = cfg();
         const c = ctx();
-        const tpl = String(s.systemPrompt || '').trim() || DEFAULT_SYSTEM_PROMPT;
+        const tpl = net === 'twitter'
+            ? (String(s.systemPromptTw || '').trim() || DEFAULT_TW_PROMPT)
+            : (String(s.systemPrompt || '').trim() || DEFAULT_SYSTEM_PROMPT);
         return tpl.replace(/\{\{language\}\}/gi, s.language || 'русский')
             .replace(/\{\{user\}\}/gi, c.name1 || 'User')
             .replace(/\{\{char\}\}/gi, c.name2 || '');
@@ -175,6 +183,21 @@
 - Не пересказывай чат: комментаторы знают о событиях из слухов, могут ошибаться и спорить.
 - Язык текста: {{language}}. Ники и названия сабов — латиницей.
 - Персонаж игрока ({{user}}) НЕ пишет в ленту: ни постов, ни комментариев от его имени, под любым ником. О нём можно только говорить в третьем лице.`;
+
+    const DEFAULT_TW_PROMPT = `Ты — генератор ленты вымышленного Твиттера (X), который существует ВНУТРИ мира ролевой игры. Главный юмор: даже если в сеттинге нет интернета (средневековье, эльфы, древность, космос), жители этого мира сидят в Твиттере и ведут себя как типичный Твиттер 2015–2024-х.
+
+Твиттер — НЕ Реддит. Отличия обязательны:
+- Коротко и резко: один твит — одна мысль, часто одна строка. Никаких развёрнутых рассуждений и вежливых обсуждений. Длинное — только тредом «1/», и это редкость.
+- Жанры: горячие тейки, ироничные one-liner'ы, «BREAKING:» от инсайдеров и новостных аккаунтов, стан-аккаунты и фанбазы персонажей (капслок, «он ничего не сделал», «мать», «отец»), ратио, «кто спрашивал», цитаты с уничтожающей подписью, «это не тот флекс, о котором ты думаешь», поэтичный саднпостинг в 3 ночи, «никто: / абсолютно никто: / X:», «main character дня», тред-разоблачения, официальные аккаунты крепостей и домов с неловким SMM, пиар-катастрофы, извинения в заметках.
+- Ответы под твитами — короткие, злые или восторженные, много реакций одной фразой, споры «по фактам», внезапные эксперты, «поясните за…».
+- Аккаунты: отображаемое имя (можно с эмодзи, на языке текста) + @handle латиницей. Галочка «verified» — у знати, официальных аккаунтов и тех, кто её купил (над этим шутят).
+- Хэштеги — 0–2 на твит, внутримировые, по-русски или латиницей (#Белерианд, #FeanorDidNothingWrong). Эмодзи уместны, но не в каждом твите.
+- Персонажи сохраняют СВОИ характеры и знания, но в формате твита: гордый пишет высокомерные односложные ответы, болтун — треды. Реагируют на реальные события последних сообщений ролевой игры: слухи, искажения, хайп, мемы.
+- Не пересказывай чат: пишущие знают о событиях из слухов, могут ошибаться и ссориться.
+- Язык текста: {{language}}. @handle — латиницей.
+- Персонаж игрока ({{user}}) НЕ пишет твитов и ответов: ни от своего имени, ни под любым ником. О нём можно только говорить и отмечать его в третьем лице.`;
+
+    const TWEET_REPLY_SCHEMA = `{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"body":"текст ответа","likes":число,"replies":[ ...такие же объекты, вложенность до 2 уровней... ]}`;
 
     const COMMENT_SCHEMA = `{"author":"ник","flair":"короткий флер или пусто","body":"текст","score":число,"replies":[ ...такие же объекты, вложенность до 2 уровней... ]}`;
 
@@ -264,10 +287,28 @@ ${g.chars}`;
         return `\nВАЖНО: ${names.join(' / ')} — персонаж ИГРОКА. Он не автор: никаких постов и комментариев от его лица и ников, похожих на его имена (${names.map(n => translit(n).replace(/\s+/g, '_')).join(', ')} и т.п.). Его комменты появляются в ленте только когда игрок пишет их сам.\n`;
     }
 
-    function postsPrompt() {
+    function tweetsPrompt() {
         const s = cfg();
         const f = feed();
-        const recent = f.posts.slice(0, 12).map(p => `- r/${p.sub}: ${p.title}`).join('\n');
+        const recent = f.posts.filter(p => p.net === 'twitter').slice(0, 15).map(p => `- @${p.author}: ${String(p.body).slice(0, 90)}`).join('\n');
+        const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3) + 2;
+        return `${worldContext()}
+
+${recent ? `## Уже в ленте (не повторяй)\n${recent}\n\n` : ''}## Задание
+Сгенерируй от ${min + 1} до ${max} новых твитов по свежим событиям ролевой игры. Разные голоса и форматы: инсайдер с BREAKING, стан-аккаунт, ироничный тейк, официальный аккаунт, саднпост, мем-шаблон, цитата-ратио.
+У каждого твита от 1 до ${s.commentsPerPost} ответов, ответы на ответы — редко.
+ДЛИНА СТРОГО: твит не длиннее 280 символов (большинство 40–150), ответ не длиннее ${Math.min(200, s.maxCommentChars)} символов.
+${imageGuidance()}
+${playerRule()}
+Ответь ТОЛЬКО JSON без пояснений:
+{"posts":[{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"body":"текст твита","image_prompt":"...","likes":число,"retweets":число,"replies":[${TWEET_REPLY_SCHEMA}]}]}`;
+    }
+
+    function postsPrompt(net = netOf()) {
+        if (net === 'twitter') return tweetsPrompt();
+        const s = cfg();
+        const f = feed();
+        const recent = f.posts.filter(p => p.net !== 'twitter').slice(0, 12).map(p => `- r/${p.sub}: ${p.title}`).join('\n');
         const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3);
         return `${worldContext()}
 
@@ -285,11 +326,28 @@ ${playerRule()}
         return (list || []).map(c => `${'  '.repeat(depth)}- u/${c.author}: ${c.body}\n${threadToText(c.replies, depth + 1)}`).join('');
     }
 
+    function moreTweetsPrompt(post) {
+        return `${worldContext()}
+
+## Твит
+${post.name || post.author} (@${post.author})${post.mine ? ' — это твит игрока' : ''}
+${post.body || ''}
+
+## Ответы сейчас
+${threadToText(post.comments).replace(/u\//g, '@') || '(пока нет)'}
+
+## Задание
+Добавь ещё ${cfg().commentsPerPost} ответов (каждый не длиннее ${Math.min(200, cfg().maxCommentChars)} символов): новые люди приходят из рекомендаций, отвечают автору и друг другу (особенно на ответы @${normHandle(ctx().name1)}, если есть — ответь каждому), устраивают ратио, стан-войны или мем.
+${playerRule()}Ответь ТОЛЬКО JSON:
+{"new":[${TWEET_REPLY_SCHEMA}],"replies":[{"to":"точный handle автора, которому отвечают","to_text":"первые слова его ответа","comment":${TWEET_REPLY_SCHEMA}}]}`;
+    }
+
     function morePrompt(post) {
+        if (post.net === 'twitter') return moreTweetsPrompt(post);
         return `${worldContext()}
 
 ## Пост
-r/${post.sub} · u/${post.author}
+r/${post.sub} · u/${post.author}${post.mine ? ' — это пост игрока: тред отвечает ему' : ''}
 ${post.title}
 ${post.body || ''}
 
@@ -381,8 +439,8 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         return c.generateRaw({ prompt: user, systemPrompt: system, responseLength: maxTokens });
     }
 
-    async function ask(prompt) {
-        const raw = await callModel(styleRules(), prompt, Number(cfg().responseLength) || 5000);
+    async function ask(prompt, net = netOf()) {
+        const raw = await callModel(styleRules(net), prompt, Number(cfg().responseLength) || 5000);
         return parseJson(raw);
     }
 
@@ -440,12 +498,12 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (!aliases.length) return 0;
         let n = 0;
         const clean = list => (list || []).filter(c => {
-            if (!c.mine && isPlayerNick(c.author, aliases)) { n++; return false; }
+            if (!c.mine && (isPlayerNick(c.author, aliases) || (c.name && isPlayerNick(c.name, aliases)))) { n++; return false; }
             c.replies = clean(c.replies);
             return true;
         });
         f.posts = f.posts.filter(p => {
-            if (isPlayerNick(p.author, aliases)) { n++; return false; }
+            if (!p.mine && (isPlayerNick(p.author, aliases) || (p.name && isPlayerNick(p.name, aliases)))) { n++; return false; }
             p.comments = clean(p.comments);
             return true;
         });
@@ -453,19 +511,48 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         return n;
     }
 
-    function normComment(c, aliases) {
+    function normComment(c, aliases, tw = false) {
         if (!c || typeof c !== 'object') return null;
-        if (cfg().blockPlayer !== false && isPlayerNick(c.author, aliases)) { dropped++; return null; } // вместе с ответами на него
-        const body = cap(c.body ?? c.text ?? '', cfg().maxCommentChars);
+        const nick = tw ? (c.handle ?? c.author) : c.author;
+        if (cfg().blockPlayer !== false && (isPlayerNick(nick, aliases) || (tw && c.name && isPlayerNick(c.name, aliases)))) { dropped++; return null; } // вместе с ответами на него
+        const body = cap(c.body ?? c.text ?? '', tw ? Math.min(280, cfg().maxCommentChars * 1.2) : cfg().maxCommentChars);
         if (!body) return null;
-        return {
+        const pts = tw ? (c.likes ?? c.score) : c.score;
+        const out = {
             id: uid(),
-            author: normUser(c.author),
+            author: tw ? normHandle(nick) : normUser(nick),
             flair: String(c.flair || '').slice(0, 40),
             body,
-            score: Number.isFinite(+c.score) ? Math.round(+c.score) : Math.floor(Math.random() * 300),
+            score: Number.isFinite(+pts) ? Math.round(+pts) : Math.floor(Math.random() * 300),
             ts: Date.now() - Math.floor(Math.random() * 3 * 3600e3),
-            replies: (Array.isArray(c.replies) ? c.replies : []).map(x => normComment(x, aliases)).filter(Boolean),
+            replies: (Array.isArray(c.replies) ? c.replies : []).map(x => normComment(x, aliases, tw)).filter(Boolean),
+        };
+        if (tw) { out.name = String(c.name || '').trim().slice(0, 50) || out.author; out.verified = !!c.verified; }
+        return out;
+    }
+
+    function normTweet(p) {
+        if (!p || !String(p.body ?? p.text ?? '').trim()) return null;
+        const aliases = playerAliases();
+        const nick = p.handle ?? p.author;
+        if (cfg().blockPlayer !== false && (isPlayerNick(nick, aliases) || (p.name && isPlayerNick(p.name, aliases)))) { dropped++; return null; }
+        const likes = Number.isFinite(+p.likes) ? Math.round(+p.likes) : Math.floor(Math.random() * 4000);
+        const handle = normHandle(nick);
+        return {
+            id: uid(),
+            net: 'twitter',
+            author: handle,
+            name: String(p.name || '').trim().slice(0, 50) || handle,
+            verified: !!p.verified,
+            sub: '', flair: '', title: '',
+            body: cap(p.body ?? p.text, 280),
+            score: likes,
+            retweets: Number.isFinite(+p.retweets) ? Math.round(+p.retweets) : Math.floor(likes / 6),
+            views: Math.round(likes * (25 + Math.random() * 40) + 300),
+            ts: Date.now() - Math.floor(Math.random() * 40 * 60e3),
+            vote: 0,
+            image: p.image_prompt && cfg().imageMode !== 'off' ? { prompt: String(p.image_prompt).trim(), src: '' } : null,
+            comments: (Array.isArray(p.replies ?? p.comments) ? (p.replies ?? p.comments) : []).map(x => normComment(x, aliases, true)).filter(Boolean),
         };
     }
 
@@ -475,6 +562,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (cfg().blockPlayer !== false && isPlayerNick(p.author, aliases)) { dropped++; return null; }
         return {
             id: uid(),
+            net: 'reddit',
             sub: normSub(p.sub),
             author: normUser(p.author),
             flair: String(p.flair || '').slice(0, 40),
@@ -494,18 +582,20 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (busy) return;
         const chatId = ctx().getCurrentChatId?.();
         if (!chatId) return toastr.info('Сначала открой чат.', 'Лента мира');
-        busy = true; renderBusy();
+        const net = netOf();
+        busy = net; renderBusy();
         try {
-            const data = await ask(postsPrompt());
+            const data = await ask(postsPrompt(net), net);
             if (ctx().getCurrentChatId?.() !== chatId) return;
             dropped = 0;
-            const posts = (Array.isArray(data) ? data : data.posts || []).map(normPost).filter(Boolean);
+            const raw = Array.isArray(data) ? data : data.posts || data.tweets || [];
+            const posts = raw.map(net === 'twitter' ? normTweet : normPost).filter(Boolean);
             if (dropped) console.info(`[world-feed] убрано записей от лица персонажа игрока: ${dropped}`);
             if (!posts.length) throw new Error('в ответе нет постов');
             feed().posts.unshift(...posts);
             save();
             if (!isOpen) setBadge(posts.length);
-            toastr.success(`Новых постов: ${posts.length}`, 'Лента мира');
+            toastr.success(net === 'twitter' ? `Новых твитов: ${posts.length}` : `Новых постов: ${posts.length}`, 'Лента мира');
         } catch (e) {
             console.error('[world-feed]', e);
             toastr.error(errText(e), 'Лента не обновилась', { timeOut: 10000 });
@@ -515,12 +605,12 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     }
 
     function findComment(list, author, text) {
-        const a = normUser(author).toLowerCase();
+        const a = normHandle(normUser(author)).toLowerCase();
         const t = String(text || '').toLowerCase().slice(0, 25);
         let fallback = null;
         const walk = l => {
             for (const c of l || []) {
-                if (c.author.toLowerCase() === a) {
+                if (normHandle(c.author).toLowerCase() === a) {
                     if (!t || c.body.toLowerCase().startsWith(t.slice(0, 12))) return c;
                     fallback ??= c;
                 }
@@ -540,20 +630,21 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (!post || postBusy.has(postId)) return;
         postBusy.add(postId); render();
         try {
-            const data = await ask(morePrompt(post));
+            const tw = post.net === 'twitter';
+            const data = await ask(morePrompt(post), tw ? 'twitter' : 'reddit');
             if (ctx().getCurrentChatId?.() !== chatId) return;
             let added = 0;
             dropped = 0;
             const aliases = playerAliases();
             for (const r of data.replies || []) {
-                const cm = normComment(r.comment, aliases);
+                const cm = normComment(r.comment, aliases, tw);
                 if (!cm) continue;
-                const target = findComment(post.comments, r.to, r.to_text);
+                const target = findComment(post.comments, tw ? normHandle(r.to) : r.to, r.to_text);
                 (target ? target.replies : post.comments).push(cm);
                 added++;
             }
             for (const n of data.new || []) {
-                const cm = normComment(n, aliases);
+                const cm = normComment(n, aliases, tw);
                 if (cm) { post.comments.push(cm); added++; }
             }
             save();
@@ -626,7 +717,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (!post) return;
         if (!post.image) post.image = { prompt: '', src: '' };
         if (!post.image.prompt) {
-            const p = await ctx().Popup.show.input('Фото к посту', 'Что на снимке? (лучше по-английски)', post.title);
+            const p = await ctx().Popup.show.input('Фото к посту', 'Что на снимке? (лучше по-английски)', post.title || String(post.body || '').slice(0, 120));
             if (!p) return;
             post.image.prompt = p;
         }
@@ -664,7 +755,18 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
 
     let $win = null;
     let isOpen = false;
-    const ui = { open: new Set(), expanded: new Set(), sub: '', sort: 'new' };
+    const ui = { open: new Set(), expanded: new Set(), sub: '', tag: '', sort: 'new', composing: false };
+
+    function switchNet(net) {
+        net = net === 'twitter' ? 'twitter' : 'reddit';
+        if (cfg().net === net) return;
+        cfg().net = net;
+        ctx().saveSettingsDebounced();
+        ui.sub = ''; ui.tag = ''; ui.composing = false;
+        if (settingsOpen) toggleSettings(false);
+        render();
+        $win?.find('.wf-feed').scrollTop(0);
+    }
     const LONG_POST = 320;
 
     function ensureWindow() {
@@ -674,14 +776,13 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
   <div class="wf-browser">
     <div class="wf-chrome">
       <span class="wf-dots"><i></i><i></i><i></i></span>
-      <span class="wf-url">https://www.reddit.world/<span id="wf_url_sub"></span></span>
+      <span class="wf-url"><span id="wf_url_host">https://www.reddit.world/</span><span id="wf_url_sub"></span></span>
       <span class="wf-close" title="Закрыть">✕</span>
     </div>
     <div class="wf-topbar">
-      <span class="wf-logo"><span class="wf-snoo">👽</span> <b>reddit</b><small>.world</small></span>
-      <span class="wf-sort">
-        <button data-sort="new">🆕 Новое</button><button data-sort="hot">🔥 Горячее</button><button data-sort="top">🏆 Топ</button>
-      </span>
+      <span class="wf-nets"><button data-net="reddit" title="Reddit">👽 reddit</button><button data-net="twitter" title="Twitter / X">𝕏 twitter</button></span>
+      <span class="wf-sort"></span>
+      <button class="wf-compose-btn" data-act="compose">✏ Пост</button>
       <button class="wf-refresh">⟳ Обновить ленту</button>
       <button class="wf-gear" title="Настройки ленты">⚙ Настройки</button>
     </div>
@@ -701,6 +802,15 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         $win.on('click', '.wf-gear', () => toggleSettings());
         bindSettingsPage($win.find('.wf-settings-page'));
         $win.on('click', '[data-sort]', function () { ui.sort = this.dataset.sort; render(); });
+        $win.on('click', '[data-net]', function () { switchNet(this.dataset.net); });
+        $win.on('click', '[data-tag]', function () { ui.tag = this.dataset.tag; render(); $win.find('.wf-feed').scrollTop(0); });
+        $win.on('input', '.wf-new-body, .wf-tw-input', function () {
+            const $c = $(this).closest('.wf-newpost, .wf-tw-compose').find('.wf-count');
+            if ($c.length) { const n = 280 - this.value.length; $c.text(n).toggleClass('wf-over', n < 0); }
+        });
+        $win.on('keydown', '.wf-new-body, .wf-tw-input, .wf-new-title', function (e) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $(this).closest('.wf-newpost, .wf-tw-compose').find('[data-act="publish"]').trigger('click');
+        });
         $win.on('click', '[data-sub]', function () { ui.sub = this.dataset.sub; render(); $win.find('.wf-feed').scrollTop(0); });
         $win.on('click', '.wf-spoiler', function () { $(this).toggleClass('wf-shown'); });
         $win.on('click', '[data-act]', onAction);
@@ -735,7 +845,10 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     }
 
     function sorted(posts) {
-        const arr = posts.filter(p => !ui.sub || p.sub === ui.sub);
+        const net = netOf();
+        const arr = posts.filter(p => p.net === net && (net === 'twitter'
+            ? (!ui.tag || tagsOf(p.body).includes(ui.tag))
+            : (!ui.sub || p.sub === ui.sub)));
         if (ui.sort === 'top') return arr.sort((a, b) => (b.score + b.vote) - (a.score + a.vote));
         if (ui.sort === 'hot') return arr.sort((a, b) => (b.score + b.comments.length * 50) / Math.pow((Date.now() - b.ts) / 3600e3 + 2, 1.5)
             - (a.score + a.comments.length * 50) / Math.pow((Date.now() - a.ts) / 3600e3 + 2, 1.5));
@@ -806,6 +919,137 @@ ${voteBox(p.score, p.vote, p.id)}
 </div></article>`;
     }
 
+    const tagsOf = t => [...new Set((String(t || '').match(/#[\p{L}\p{N}_]{2,40}/gu) || []).map(x => x.toLowerCase()))];
+
+    /** Текст твита: markdown + подсветка #тегов и @упоминаний. */
+    function twText(s) {
+        return md(s).replace(/(^|[\s(>])(#[\p{L}\p{N}_]{2,40})/gu, (m, a, t) => `${a}<span class="wf-tw-link" data-tag="${esc(t.toLowerCase())}">${t}</span>`)
+            .replace(/(^|[\s(>])@([A-Za-z0-9_]{2,30})/g, '$1<span class="wf-tw-link">@$2</span>');
+    }
+
+    function twHead(c) {
+        return `<span class="wf-tw-name ${c.mine ? 'wf-me' : ''}">${esc(c.name || c.author)}</span>${c.verified ? '<span class="wf-tw-check" title="verified">✓</span>' : ''}
+<span class="wf-muted">@${esc(c.author)} · ${ago(c.ts)}</span>`;
+    }
+
+    function twAva(name, big) {
+        return `<span class="wf-tw-ava ${big ? '' : 'sm'}" style="background:${avatarColor(name)}">${esc(String(name || '?').replace(/^[^\p{L}\p{N}]+/u, '')[0] || '?').toUpperCase()}</span>`;
+    }
+
+    function tweetReplyHtml(c, postId) {
+        const path = `${postId}|${c.id}`;
+        return `<div class="wf-tw-reply" data-cid="${c.id}">
+${twAva(c.name || c.author)}
+<div class="wf-tw-main">
+  <div class="wf-tw-head">${twHead(c)}</div>
+  <div class="wf-tw-text">${twText(c.body)}</div>
+  <div class="wf-tw-actions">
+    <button data-act="reply" data-path="${path}">💬 ${countComments(c.replies) || ''}</button>
+    <button data-act="up" data-path="${path}" class="${c.vote > 0 ? 'wf-liked' : ''}">${c.vote > 0 ? '❤' : '♡'} ${fmtScore((c.score || 0) + (c.vote > 0 ? 1 : 0))}</button>
+    <button data-act="delc" data-path="${path}" title="Удалить">🗑</button>
+  </div>
+  <div class="wf-reply-slot"></div>
+  ${(c.replies || []).map(r => tweetReplyHtml(r, postId)).join('')}
+</div></div>`;
+    }
+
+    function tweetHtml(p) {
+        const isOpen = ui.open.has(p.id);
+        const n = countComments(p.comments);
+        const liked = p.vote > 0;
+        return `<article class="wf-tweet" data-pid="${p.id}">
+${twAva(p.name || p.author, true)}
+<div class="wf-tw-main">
+  <div class="wf-tw-head">${twHead(p)}</div>
+  <div class="wf-tw-text big">${twText(p.body)}</div>
+  ${imageHtml(p)}
+  <div class="wf-tw-actions">
+    <button data-act="toggle" data-path="${p.id}" title="Ответы">💬 ${n}</button>
+    <button data-act="rt" data-path="${p.id}" class="${p.rt ? 'wf-rted' : ''}" title="Ретвит">🔁 ${fmtScore((p.retweets || 0) + (p.rt ? 1 : 0))}</button>
+    <button data-act="up" data-path="${p.id}" class="${liked ? 'wf-liked' : ''}" title="Нравится">${liked ? '❤' : '♡'} ${fmtScore((p.score || 0) + (liked ? 1 : 0))}</button>
+    <span class="wf-muted" title="Просмотры">📊 ${fmtScore(p.views || 0)}</span>
+    ${p.image || cfg().imageMode === 'off' ? '' : `<button data-act="img" data-path="${p.id}" title="Фото">📷</button>`}
+    ${p.image?.src ? `<button data-act="reimg" data-path="${p.id}" title="Другое фото">🔄</button>` : ''}
+    <button data-act="delp" data-path="${p.id}" title="Удалить">🗑</button>
+  </div>
+  ${isOpen ? `<div class="wf-tw-thread">
+    <div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${p.id}" placeholder="Ответить @${esc(p.author)}… (Ctrl+Enter)"></textarea>
+      <button data-act="send" data-path="${p.id}">Ответить</button></div>
+    ${p.comments.map(c => tweetReplyHtml(c, p.id)).join('') || '<div class="wf-muted wf-pad">Ответов пока нет…</div>'}
+    <button class="wf-more" data-act="more" data-path="${p.id}" ${postBusy.has(p.id) ? 'disabled' : ''}>${postBusy.has(p.id) ? '<span class="wf-spin"></span> печатают…' : '⬇ Ещё ответы'}</button>
+  </div>` : ''}
+</div></article>`;
+    }
+
+    /** Форма своего поста: на Реддите — по кнопке «✏ Пост», в Твиттере — всегда сверху ленты. */
+    function composerHtml(all) {
+        const me = esc(ctx().name1 || 'я');
+        if (netOf() === 'twitter') {
+            return `<div class="wf-tw-compose">${twAva(ctx().name1, true)}
+<div class="wf-tw-main"><textarea class="wf-tw-input" rows="2" placeholder="Что происходит, ${me}?"></textarea>
+<div class="wf-row wf-tw-crow"><span class="wf-muted">Ctrl+Enter</span><span class="wf-count">280</span>
+<button class="wf-btn wf-tw-btn" data-act="publish">Твитнуть</button></div></div></div>`;
+        }
+        if (!ui.composing) return '';
+        const subs = [...new Set(all.filter(p => p.net !== 'twitter').map(p => p.sub))];
+        return `<div class="wf-newpost wf-card wf-pad">
+<div class="wf-row"><b>Новый пост от u/${esc(normUser(ctx().name1))}</b><button class="wf-linkbtn wf-x" data-act="compose" title="Отмена">✕</button></div>
+<label class="wf-f">Сообщество<input class="wf-new-sub" list="wf_subs" placeholder="r/Beleriand" value="${esc(ui.sub || subs[0] || '')}"></label>
+<datalist id="wf_subs">${subs.map(x => `<option value="${esc(x)}">`).join('')}</datalist>
+<label class="wf-f">Заголовок<input class="wf-new-title" placeholder="AITA за то, что…"></label>
+<label class="wf-f">Текст (можно пусто)<textarea class="wf-new-body" rows="5" placeholder="**жирный**, *курсив*, >цитата, >!спойлер!<"></textarea></label>
+<div class="wf-row"><button class="wf-btn" data-act="publish">Опубликовать</button>
+<span class="wf-muted">${cfg().autoReplies !== false ? 'жители сразу начнут комментировать' : 'комменты — кнопкой в треде'}</span></div></div>`;
+    }
+
+    async function publishOwn($btn) {
+        const c = ctx();
+        const f = feed();
+        if (!f) return toastr.info('Сначала открой чат.', 'Лента мира');
+        const tw = netOf() === 'twitter';
+        const $box = $btn.closest('.wf-newpost, .wf-tw-compose');
+        let post;
+        if (tw) {
+            const body = String($box.find('.wf-tw-input').val() || '').trim();
+            if (!body) return;
+            if (body.length > 280) return toastr.warning(`Длиннее 280 символов на ${body.length - 280}. Это Твиттер, а не летопись.`, 'Лента мира');
+            post = { id: uid(), net: 'twitter', mine: true, author: normHandle(translit(c.name1 || 'me')), name: c.name1 || 'я', verified: false,
+                sub: '', flair: '', title: '', body, score: 0, retweets: 0, views: 1, ts: Date.now(), vote: 0, image: null, comments: [] };
+        } else {
+            const title = String($box.find('.wf-new-title').val() || '').trim();
+            if (!title) return toastr.warning('Нужен заголовок.', 'Лента мира');
+            post = { id: uid(), net: 'reddit', mine: true, sub: normSub($box.find('.wf-new-sub').val()), author: normUser(c.name1), flair: '',
+                title, body: String($box.find('.wf-new-body').val() || '').trim(), score: 1, ts: Date.now(), vote: 1, image: null, comments: [] };
+            ui.composing = false;
+        }
+        f.posts.unshift(post);
+        ui.open.add(post.id);
+        save(); render();
+        $win.find('.wf-feed').scrollTop(0);
+        if (cfg().autoReplies !== false) moreComments(post.id);
+    }
+
+    function trendsHtml(posts) {
+        const tags = {};
+        for (const p of posts) for (const t of tagsOf(p.body)) tags[t] = (tags[t] || 0) + 1;
+        const list = Object.entries(tags).sort((a, b) => b[1] - a[1]).slice(0, 12);
+        const people = {};
+        for (const p of posts) {
+            if (p.mine) continue;
+            (people[p.author] ??= { name: p.name || p.author, n: 0, v: p.verified }).n++;
+        }
+        const who = Object.entries(people).sort((a, b) => b[1].n - a[1].n).slice(0, 5);
+        return `<div class="wf-card wf-tw-card"><div class="wf-tw-card-h">Актуальные темы</div>
+<div class="wf-sub-item ${ui.tag ? '' : 'on'}" data-tag="">🏠 Вся лента <span class="wf-muted">${posts.length}</span></div>
+${list.map(([t, n]) => `<div class="wf-sub-item ${ui.tag === t ? 'on' : ''}" data-tag="${esc(t)}"><div><small class="wf-muted">Тренды мира</small><br><b>${esc(t)}</b></div><span class="wf-muted">${n}</span></div>`).join('') || '<div class="wf-pad wf-muted">Хэштегов пока нет.</div>'}
+</div>
+${who.length ? `<div class="wf-card wf-tw-card"><div class="wf-tw-card-h">Самые громкие</div>
+${who.map(([h, x]) => `<div class="wf-sub-item">${twAva(x.name)}<div style="margin-left:8px"><b>${esc(x.name)}</b>${x.v ? '<span class="wf-tw-check">✓</span>' : ''}<br><small class="wf-muted">@${esc(h)}</small></div><span class="wf-muted">${x.n}</span></div>`).join('')}</div>` : ''}
+<div class="wf-card wf-pad wf-muted">🔌 ${esc(connLabel())}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
+<div class="wf-card wf-muted wf-pad">Лента — чистое развлечение: в промпт ролевой игры не попадает. Хранится в этом чате.
+<br><br><button class="wf-linkbtn" data-act="clear">Очистить Твиттер этого чата</button></div>`;
+    }
+
     function sideHtml(posts) {
         const subs = {};
         for (const p of posts) subs[p.sub] = (subs[p.sub] || 0) + 1;
@@ -816,12 +1060,13 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
 </div>
 <div class="wf-card wf-pad wf-muted">🔌 ${esc(connLabel())}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
 <div class="wf-card wf-muted wf-pad">Лента — чистое развлечение: в промпт ролевой игры не попадает. Хранится в этом чате.
-<br><br><button class="wf-linkbtn" data-act="clear">Очистить ленту чата</button></div>`;
+<br><br><button class="wf-linkbtn" data-act="clear">Очистить Реддит этого чата</button></div>`;
     }
 
     function renderBusy() {
         if (!$win) return;
-        $win.find('.wf-refresh').prop('disabled', busy).html(busy ? '<span class="wf-spin"></span> Мир пишет посты…' : '⟳ Обновить ленту');
+        const label = busy === 'twitter' ? 'Мир твитит…' : 'Мир пишет посты…';
+        $win.find('.wf-refresh').prop('disabled', !!busy).html(busy ? `<span class="wf-spin"></span> ${label}` : '⟳ Обновить ленту');
     }
 
     function render() {
@@ -831,19 +1076,33 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         const scroll = $feed.scrollTop();
         const drafts = {};
         $win.find('.wf-reply-input').each(function () { if (this.value) drafts[this.dataset.path] = this.value; });
-        $win.find('#wf_url_sub').text(ui.sub ? `r/${ui.sub}/` : '');
+        const tw = netOf() === 'twitter';
+        $win.toggleClass('wf-tw', tw);
+        $win.find('[data-net]').each(function () { $(this).toggleClass('on', this.dataset.net === netOf()); });
+        $win.find('#wf_url_host').text(tw ? 'https://x.world/' : 'https://www.reddit.world/');
+        $win.find('#wf_url_sub').text(tw ? (ui.tag ? `search?q=${ui.tag}` : 'home') : (ui.sub ? `r/${ui.sub}/` : ''));
+        $win.find('.wf-sort').html(tw
+            ? '<button data-sort="hot">Для вас</button><button data-sort="new">Последнее</button><button data-sort="top">Топ</button>'
+            : '<button data-sort="new">🆕 Новое</button><button data-sort="hot">🔥 Горячее</button><button data-sort="top">🏆 Топ</button>');
         $win.find('[data-sort]').each(function () { $(this).toggleClass('on', this.dataset.sort === ui.sort); });
+        $win.find('.wf-compose-btn').toggle(!tw).toggleClass('on', ui.composing);
         renderBusy();
         if (!f) {
             $feed.html('<div class="wf-empty">Открой чат — у каждого чата своя лента.</div>');
             $win.find('.wf-side').empty();
             return;
         }
+        const keep = {};
+        $win.find('.wf-new-sub, .wf-new-title, .wf-new-body, .wf-tw-input').each(function () { keep[this.className] = this.value; });
         const posts = sorted(f.posts);
-        $feed.html(posts.length ? posts.map(postHtml).join('')
-            : `<div class="wf-empty">👽<br>Здесь пока пусто.<br>Нажми «Обновить ленту» — и жители мира начнут обсуждать, что у вас стряслось.</div>`);
-        $win.find('.wf-side').html(sideHtml(f.posts));
+        const mine = f.posts.filter(p => p.net === netOf());
+        const empty = tw
+            ? `<div class="wf-empty">𝕏<br>Тишина в ленте.<br>Нажми «Обновить ленту» — и мир начнёт твитить о том, что у вас стряслось.</div>`
+            : `<div class="wf-empty">👽<br>Здесь пока пусто.<br>Нажми «Обновить ленту» — и жители мира начнут обсуждать, что у вас стряслось.</div>`;
+        $feed.html(composerHtml(f.posts) + (posts.length ? posts.map(tw ? tweetHtml : postHtml).join('') : empty));
+        $win.find('.wf-side').html(tw ? trendsHtml(mine) : sideHtml(mine));
         $win.find('.wf-reply-input').each(function () { if (drafts[this.dataset.path]) this.value = drafts[this.dataset.path]; });
+        $win.find('.wf-new-sub, .wf-new-title, .wf-new-body, .wf-tw-input').each(function () { if (keep[this.className] !== undefined) this.value = keep[this.className]; });
         $feed.scrollTop(scroll);
     }
 
@@ -876,6 +1135,13 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 target.vote = target.vote === v ? 0 : v;
                 break;
             }
+            case 'compose':
+                ui.composing = !ui.composing;
+                render();
+                if (ui.composing) { $win.find('.wf-feed').scrollTop(0); $win.find('.wf-new-title').trigger('focus'); }
+                return;
+            case 'publish': return publishOwn($(this));
+            case 'rt': if (post) post.rt = !post.rt; break;
             case 'toggle': ui.open.has(post.id) ? ui.open.delete(post.id) : ui.open.add(post.id); break;
             case 'expand':
                 if (ui.expanded.has(post.id) || ui.open.has(post.id)) { ui.expanded.delete(post.id); ui.open.delete(post.id); }
@@ -894,7 +1160,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             case 'reply': {
                 const $slot = $(this).closest('.wf-c-main').children('.wf-reply-slot');
                 if ($slot.children().length) { $slot.empty(); return; }
-                $slot.html(`<div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${path}" placeholder="Ответ u/${esc(comment.author)}…"></textarea>
+                $slot.html(`<div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${path}" placeholder="Ответ ${post.net === 'twitter' ? '@' : 'u/'}${esc(comment.author)}…"></textarea>
 <button data-act="send" data-path="${path}">Ответить</button></div>`);
                 $slot.find('textarea').trigger('focus');
                 return;
@@ -903,24 +1169,27 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 const $ta = $(this).siblings('.wf-reply-input');
                 const text = String($ta.val() || '').trim();
                 if (!text) return;
-                const mine = { id: uid(), author: normUser(ctx().name1), flair: '', body: text, score: 1, ts: Date.now(), replies: [], mine: true };
+                const mine = post.net === 'twitter'
+                    ? { id: uid(), author: normHandle(translit(ctx().name1 || 'me')), name: ctx().name1 || 'я', flair: '', body: text, score: 0, ts: Date.now(), replies: [], mine: true }
+                    : { id: uid(), author: normUser(ctx().name1), flair: '', body: text, score: 1, ts: Date.now(), replies: [], mine: true };
                 (comment ? comment.replies : post.comments).push(mine);
                 $ta.val('');
                 save(); render();
-                toastr.info('Жми «Загрузить ещё комментарии» — тебе ответят.', 'Коммент опубликован', { timeOut: 3000 });
+                toastr.info(post.net === 'twitter' ? 'Жми «Ещё ответы» — тебе ответят.' : 'Жми «Загрузить ещё комментарии» — тебе ответят.', 'Опубликовано', { timeOut: 3000 });
                 return;
             }
             case 'delc': if (comment) parentList.splice(parentList.indexOf(comment), 1); break;
             case 'delp': {
-                const ok = await ctx().Popup.show.confirm('Удалить пост?', esc(post.title));
+                const ok = await ctx().Popup.show.confirm('Удалить пост?', esc(post.title || String(post.body || '').slice(0, 140)));
                 if (!ok) return;
                 const f = feed(); f.posts.splice(f.posts.indexOf(post), 1);
                 break;
             }
             case 'clear': {
-                const ok = await ctx().Popup.show.confirm('Очистить ленту?', 'Все посты этого чата будут удалены.');
+                const net = netOf();
+                const ok = await ctx().Popup.show.confirm(`Очистить ${net === 'twitter' ? 'Твиттер' : 'Реддит'}?`, 'Все посты этой вкладки в этом чате будут удалены. Вторая вкладка останется.');
                 if (!ok) return;
-                feed().posts = [];
+                feed().posts = feed().posts.filter(p => p.net !== net);
                 break;
             }
             default: return;
@@ -991,12 +1260,21 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
   </section>
 
   <section class="wf-card wf-set-card">
-    <div class="wf-card-h">📜 Промт</div>
+    <div class="wf-card-h">📜 Промт Реддита</div>
     <div class="wf-pad">
       <div class="wf-hint">Что генерировать и как: кто пишет, сленг, сабреддиты, запреты. Плейсхолдеры: <code>{{user}}</code>, <code>{{char}}</code>, <code>{{language}}</code>. Формат JSON и лимиты длины расширение добавляет само — их сюда писать не нужно.</div>
       <textarea data-s="systemPrompt" class="wf-prompt" rows="14"></textarea>
       <div class="wf-row"><button class="wf-btn2" data-do="resetPrompt">Вернуть стандартный</button>
         <label class="wf-f wf-inline">Язык<input data-s="language" style="width:120px"></label></div>
+    </div>
+  </section>
+
+  <section class="wf-card wf-set-card">
+    <div class="wf-card-h">🐦 Промт Твиттера</div>
+    <div class="wf-pad">
+      <div class="wf-hint">Отдельный характер: коротко, тейки, стан-аккаунты, ратио. Те же плейсхолдеры. Лимит 280 символов и формат JSON расширение добавит само.</div>
+      <textarea data-s="systemPromptTw" class="wf-prompt" rows="14"></textarea>
+      <div class="wf-row"><button class="wf-btn2" data-do="resetPromptTw">Вернуть стандартный</button></div>
     </div>
   </section>
 
@@ -1028,6 +1306,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
     <div class="wf-card-h">🧩 Прочее</div>
     <div class="wf-pad wf-grid">
       <label class="wf-chk"><input type="checkbox" data-s="showFab"> Плавающая кнопка 📰</label>
+      <label class="wf-chk"><input type="checkbox" data-s="autoReplies"> На мой пост/твит сразу приходят ответы</label>
       <label class="wf-f">Фото к постам<select data-s="imageMode">
         <option value="off">Выключены</option>
         <option value="game">Стиль и внешность — из картинок игры</option>
@@ -1041,6 +1320,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             const k = this.dataset.s;
             if (this.type === 'checkbox') this.checked = s[k] !== false && !!s[k];
             else if (k === 'systemPrompt') this.value = s.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+            else if (k === 'systemPromptTw') this.value = s.systemPromptTw || DEFAULT_TW_PROMPT;
             else this.value = s[k] ?? '';
         });
         $p.find(`input[name="wf_conn"][value="${s.conn}"]`).prop('checked', true);
@@ -1059,7 +1339,8 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             const s = cfg();
             const k = this.dataset.s;
             let v = this.type === 'checkbox' ? this.checked : this.type === 'number' ? Number(this.value) : this.value;
-            if (k === 'systemPrompt' && String(v).trim() === DEFAULT_SYSTEM_PROMPT.trim()) v = ''; // стандартный = пусто, чтобы обновлялся вместе с расширением
+            if (k === 'systemPrompt' && String(v).trim() === DEFAULT_SYSTEM_PROMPT.trim()) v = '';
+            if (k === 'systemPromptTw' && String(v).trim() === DEFAULT_TW_PROMPT.trim()) v = ''; // стандартный = пусто, чтобы обновлялся вместе с расширением
             s[k] = v;
             ctx().saveSettingsDebounced();
             if (k === 'showFab') placeFab();
@@ -1084,6 +1365,10 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             } else if (act === 'resetPrompt') {
                 cfg().systemPrompt = '';
                 $p.find('[data-s="systemPrompt"]').val(DEFAULT_SYSTEM_PROMPT);
+                ctx().saveSettingsDebounced();
+            } else if (act === 'resetPromptTw') {
+                cfg().systemPromptTw = '';
+                $p.find('[data-s="systemPromptTw"]').val(DEFAULT_TW_PROMPT);
                 ctx().saveSettingsDebounced();
             } else if (act === 'models') {
                 const $out = $p.find('.wf-test-out').text('загружаю модели…');
@@ -1123,7 +1408,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
     function mountSettings() {
         const $s = $(`
 <div class="inline-drawer wf-settings">
-  <div class="inline-drawer-toggle inline-drawer-header"><b>📰 Лента мира (Reddit)</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+  <div class="inline-drawer-toggle inline-drawer-header"><b>📰 Лента мира (Reddit + Twitter)</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
   <div class="inline-drawer-content">
     <div class="flex-container">
       <button class="menu_button" id="wf_open_btn">Открыть ленту</button>
@@ -1195,14 +1480,14 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         mountMenu();
         mountFab();
         const c = ctx();
-        c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => { ui.open.clear(); ui.sub = ''; render(); });
+        c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => { ui.open.clear(); ui.sub = ''; ui.tag = ''; ui.composing = false; render(); });
         try {
             c.SlashCommandParser?.addCommandObject?.(c.SlashCommand.fromProps({
-                name: 'feed', helpString: 'Открыть ленту мира (Reddit).',
+                name: 'feed', helpString: 'Открыть ленту мира (Reddit / Twitter).',
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);

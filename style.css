@@ -218,3 +218,70 @@
 .wf-btn2:hover { border-color: var(--wf-muted); }
 .wf-test-out { font-size: 12px; word-break: break-word; }
 .wf-blue { color: var(--wf-blue) !important; }
+
+
+/* ── переключатель Reddit / Twitter ── */
+.wf-nets { display: flex; gap: 2px; background: var(--wf-bg); border: 1px solid var(--wf-line); border-radius: 20px; padding: 2px; }
+.wf-nets button { background: transparent; border: 0; border-radius: 18px; padding: 5px 12px; font-weight: 700; color: var(--wf-muted); white-space: nowrap; }
+.wf-nets button.on { background: var(--wf-orange); color: #fff; }
+.wf-tw .wf-nets button.on { background: #e7e9ea; color: #0f1419; }
+.wf-compose-btn { background: transparent; border: 1px solid var(--wf-line); border-radius: 20px; padding: 5px 14px; font-weight: 700; color: var(--wf-text); white-space: nowrap; }
+.wf-compose-btn.on, .wf-compose-btn:hover { background: var(--wf-card2); }
+
+/* ── свой пост на Реддите ── */
+.wf-newpost { margin-bottom: 12px; }
+.wf-newpost .wf-row:first-child { justify-content: space-between; margin: 0 0 10px; }
+.wf-newpost input, .wf-newpost textarea { background: var(--wf-bg); color: var(--wf-text); border: 1px solid var(--wf-line); border-radius: 4px; padding: 7px 9px; font: inherit; font-weight: 400; width: 100%; box-sizing: border-box; }
+.wf-newpost input:focus, .wf-newpost textarea:focus { outline: none; border-color: var(--wf-text); }
+.wf-x { color: var(--wf-muted) !important; font-size: 16px; }
+
+/* ── Twitter / X: чёрная тема ── */
+.wf-root.wf-tw { --wf-bg: #000; --wf-card: #000; --wf-card2: #16181c; --wf-line: #2f3336; --wf-text: #e7e9ea; --wf-muted: #71767b; --wf-orange: #1d9bf0; --wf-blue: #1d9bf0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.wf-tw .wf-topbar { background: rgba(0,0,0,.85); }
+.wf-tw .wf-sort button.on { background: transparent; box-shadow: inset 0 -3px #1d9bf0; border-radius: 0; }
+.wf-tw .wf-body { gap: 0; padding: 0; }
+.wf-tw .wf-feed { max-width: 600px; border-left: 1px solid var(--wf-line); border-right: 1px solid var(--wf-line); padding-right: 0; margin-left: auto; }
+.wf-tw .wf-side { padding: 12px 16px; margin-right: auto; }
+.wf-tw .wf-refresh { background: #1d9bf0; color: #fff !important; }
+.wf-tweet, .wf-tw-compose { display: flex; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--wf-line); }
+.wf-tweet:hover { background: #080808; }
+.wf-tw-main { flex: 1; min-width: 0; }
+.wf-tw-ava { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 16px; }
+.wf-tw-ava.sm { width: 32px; height: 32px; font-size: 13px; }
+.wf-tw-head { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; font-size: 14px; }
+.wf-tw-name { font-weight: 700; color: var(--wf-text); }
+.wf-tw-check { display: inline-flex; width: 15px; height: 15px; border-radius: 50%; background: #1d9bf0; color: #fff; font-size: 10px; align-items: center; justify-content: center; margin-left: 2px; }
+.wf-tw-text { margin: 2px 0 8px; word-wrap: break-word; font-size: 14px; }
+.wf-tw-text.big { font-size: 15px; }
+.wf-tw-link { color: #1d9bf0; cursor: pointer; }
+.wf-tw-link:hover { text-decoration: underline; }
+.wf-tw-actions { display: flex; justify-content: space-between; max-width: 440px; align-items: center; }
+.wf-tw-actions button { background: transparent; border: 0; color: var(--wf-muted); font-size: 13px; padding: 4px 8px; border-radius: 16px; }
+.wf-tw-actions button:hover { background: rgba(29,155,240,.12); color: #1d9bf0; }
+.wf-tw-actions button.wf-liked { color: #f91880; }
+.wf-tw-actions button.wf-rted { color: #00ba7c; }
+.wf-tw .wf-img { border-radius: 16px; border: 1px solid var(--wf-line); }
+.wf-tw-thread { margin-top: 8px; }
+.wf-tw-reply { display: flex; gap: 10px; padding: 10px 0 0; border-top: 1px solid var(--wf-line); margin-top: 8px; }
+.wf-tw-reply .wf-tw-reply { border-top: 0; }
+.wf-tw .wf-composer button, .wf-tw-btn { background: #1d9bf0 !important; color: #fff !important; border-radius: 18px; }
+.wf-tw .wf-more { background: transparent; color: #1d9bf0 !important; border: 1px solid var(--wf-line); }
+.wf-tw-compose textarea { width: 100%; box-sizing: border-box; background: transparent; border: 0; color: var(--wf-text); font: inherit; font-size: 18px; resize: vertical; min-height: 52px; padding: 8px 0; }
+.wf-tw-compose textarea:focus { outline: none; }
+.wf-tw-crow { justify-content: flex-end; border-top: 1px solid var(--wf-line); padding-top: 8px; }
+.wf-count { color: var(--wf-muted); font-size: 13px; min-width: 30px; text-align: right; }
+.wf-count.wf-over { color: #f4212e; font-weight: 700; }
+.wf-tw-card { background: #16181c; border: 0; border-radius: 16px; }
+.wf-tw-card-h { font-size: 19px; font-weight: 800; padding: 12px 16px; color: var(--wf-text); }
+.wf-tw-card .wf-sub-item { border-top: 0; padding: 10px 16px; }
+.wf-tw .wf-sub-item.on { box-shadow: inset 3px 0 #1d9bf0; }
+.wf-tw .wf-card-h { background: var(--wf-card2); }
+@media (max-width: 800px) {
+    .wf-nets button { padding: 6px 9px; }
+    .wf-tw .wf-feed { border: 0; max-width: none; margin: 0; }
+    .wf-tweet, .wf-tw-compose { padding: 10px 8px; gap: 8px; }
+    .wf-tw-ava { width: 34px; height: 34px; }
+    .wf-tw-actions button { padding: 8px 6px; }
+    .wf-compose-btn { padding: 8px 10px; }
+}
