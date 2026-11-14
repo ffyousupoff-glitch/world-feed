@@ -35,6 +35,8 @@
         systemPrompt: '',      // пусто = стандартный
         includeCard: true,
         historyMaxChars: 30000, // 0 = без лимита
+        commentHistory: 4,      // для «ещё комментариев»: сколько последних сообщений чата (0 — без чата)
+        commentCard: false,     // для комментов: слать ли карточку и персону
         blockPlayer: true,      // персонаж игрока не пишет в ленту
         playerAliases: '',      // другие имена персонажа игрока через запятую
         net: 'reddit',          // открытая вкладка: reddit | twitter
@@ -43,6 +45,10 @@
         systemPromptIg: '',     // пусто = стандартный промт Инстаграма
         igStyle: 'candid smartphone photo, shot on a phone camera, natural light, realistic, slightly imperfect framing, authentic social media snapshot',
         igAutoImages: 3,        // сколько новых постов Инстаграма рисовать самим за одно обновление
+        // Свои подключения Инстаграма. Текст: feed — как у ленты; profile; custom.
+        igTextConn: 'feed', igProfileId: '', igApiUrl: '', igApiKey: '', igApiModel: '', igTemperature: 1,
+        // Фото: hermes — как в Hermes Images; hprofile — другой профиль Hermes Images; custom — свой адрес/ключ/модель.
+        igImgConn: 'hermes', igImgProfileId: '', igImgEndpoint: '', igImgKey: '', igImgModel: '', igImgQuality: 'medium',
     };
     const SETTINGS_VERSION = 4;
 
@@ -131,8 +137,10 @@
         return String(s || '').replace(/<img[^>]*>/gi, '[картинка]').replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim();
     }
 
-    function worldContext() {
+    /** opts.lite — экономный контекст для комментариев: мало истории, без карточки. */
+    function worldContext(opts = {}) {
         const c = ctx();
+        const lite = !!opts.lite;
         const parts = [];
         let card = {};
         try { card = c.getCharacterCardFields?.() || {}; } catch { /* группа без карточки */ }
@@ -142,15 +150,15 @@
             const names = (g?.members || []).map(av => c.characters.find(ch => ch.avatar === av)?.name).filter(Boolean);
             if (names.length) parts.push(`Участники группового чата: ${names.join(', ')}`);
         }
-        if (cfg().includeCard === false) card = {};
+        if (cfg().includeCard === false || (lite && !cfg().commentCard)) card = {};
         if (card.description) parts.push(`## Персонаж/мир (${c.name2})\n${sub(card.description)}`);
         if (card.personality) parts.push(`## Характер\n${sub(card.personality)}`);
         if (card.scenario) parts.push(`## Сценарий\n${sub(card.scenario)}`);
         if (card.persona) parts.push(`## Персона игрока (${c.name1})\n${sub(card.persona)}`);
 
-        const n = Math.max(1, Number(cfg().historyMessages) || 20);
-        const budget = Math.max(0, Number(cfg().historyMaxChars) || 0);
-        const all = (c.chat || []).filter(m => !m.is_system && m.mes).slice(-n)
+        const n = lite ? Math.max(0, Number(cfg().commentHistory ?? 4) || 0) : Math.max(1, Number(cfg().historyMessages) || 20);
+        const budget = lite ? Math.min(8000, Math.max(0, Number(cfg().historyMaxChars) || 8000)) : Math.max(0, Number(cfg().historyMaxChars) || 0);
+        const all = (n ? (c.chat || []).filter(m => !m.is_system && m.mes).slice(-n) : [])
             .map(m => `${m.is_user ? c.name1 : (m.name || c.name2)}: ${stripHtml(m.mes)}`);
         // С конца (свежее важнее), пока влезает в лимит символов.
         const hist = [];
@@ -163,7 +171,7 @@
             }
             hist.unshift(t); used += t.length;
         }
-        if (hist.length) parts.push(`## Последние события ролевой игры\n${hist.join('\n\n')}`);
+        if (hist.length) parts.push(`## ${lite ? 'Что сейчас происходит в игре (для фона)' : 'Последние события ролевой игры'}\n${hist.join('\n\n')}`);
         return parts.join('\n\n');
     }
 
@@ -367,7 +375,7 @@ ${playerRule()}
     }
 
     function moreTweetsPrompt(post) {
-        return `${worldContext()}
+        return `${worldContext({ lite: true })}
 
 ## Твит
 ${post.name || post.author} (@${post.author})${post.mine ? ' — это твит игрока' : ''}
@@ -383,7 +391,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     }
 
     function moreIgPrompt(post) {
-        return `${worldContext()}
+        return `${worldContext({ lite: true })}
 
 ## Пост в Инстаграме
 ${post.name || post.author} (@${post.author})${post.mine ? ' — это пост игрока' : ''}${post.location ? ` · 📍${post.location}` : ''}
@@ -402,7 +410,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     function morePrompt(post) {
         if (post.net === 'twitter') return moreTweetsPrompt(post);
         if (post.net === 'insta') return moreIgPrompt(post);
-        return `${worldContext()}
+        return `${worldContext({ lite: true })}
 
 ## Пост
 r/${post.sub} · u/${post.author}${post.mine ? ' — это пост игрока: тред отвечает ему' : ''}
@@ -459,8 +467,16 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
      * поэтому CORS прокси не мешает. Ключ передаётся заголовком custom_include_headers,
      * который сервер ставит ПОСЛЕ своего Authorization, — сохранённые секреты ST не трогаются.
      */
-    async function customCall(system, user, maxTokens) {
+    /** Подключение для текста: общее ленты или своё у Инстаграма. */
+    function textConn(net) {
         const s = cfg();
+        if (net === 'insta' && s.igTextConn && s.igTextConn !== 'feed') {
+            return { conn: s.igTextConn, profileId: s.igProfileId, apiUrl: s.igApiUrl, apiKey: s.igApiKey, apiModel: s.igApiModel, temperature: s.igTemperature };
+        }
+        return { conn: s.conn, profileId: s.profileId, apiUrl: s.apiUrl, apiKey: s.apiKey, apiModel: s.apiModel, temperature: s.temperature };
+    }
+
+    async function customCall(system, user, maxTokens, s = textConn()) {
         const c = ctx();
         if (!s.apiUrl) throw new Error('не указан адрес API (Настройки ленты → Подключение)');
         if (!s.apiModel) throw new Error('не указана модель (Настройки ленты → Подключение)');
@@ -481,10 +497,10 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     }
 
     /** Сырой текст ответа модели по выбранному подключению. */
-    async function callModel(system, user, maxTokens) {
-        const s = cfg();
+    async function callModel(system, user, maxTokens, net) {
+        const s = textConn(net);
         const c = ctx();
-        if (s.conn === 'custom') return customCall(system, user, maxTokens);
+        if (s.conn === 'custom') return customCall(system, user, maxTokens, s);
         if (s.conn === 'profile') {
             if (!s.profileId) throw new Error('не выбран профиль подключения (Настройки ленты → Подключение)');
             const prof = c.extensionSettings.connectionManager?.profiles?.find(p => p.id === s.profileId);
@@ -498,12 +514,12 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     }
 
     async function ask(prompt, net = netOf()) {
-        const raw = await callModel(styleRules(net), prompt, Number(cfg().responseLength) || 5000);
+        const raw = await callModel(styleRules(net), prompt, Number(cfg().responseLength) || 5000, net);
         return parseJson(raw);
     }
 
-    function connLabel() {
-        const s = cfg();
+    function connLabel(net) {
+        const s = textConn(net);
         if (s.conn === 'custom') { try { return `${new URL(joinApi(s.apiUrl, '')).host} · ${s.apiModel || '?'}`; } catch { return 'свой API (адрес не задан)'; } }
         if (s.conn === 'profile') {
             const p = ctx().extensionSettings.connectionManager?.profiles?.find(x => x.id === s.profileId);
@@ -854,6 +870,26 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         els.forEach(el => io.observe(el));
     }
 
+    /** Настройки рисовалки для поста: у Инстаграма может быть своё подключение. */
+    function imageCfg(hcfg, net) {
+        const s = cfg();
+        if (net !== 'insta' || !s.igImgConn || s.igImgConn === 'hermes') return hcfg;
+        if (s.igImgConn === 'hprofile') {
+            const pr = (hcfg.profiles || []).find(x => x.id === s.igImgProfileId);
+            if (!pr) throw new Error('профиль Hermes Images для Инстаграма не выбран или удалён (Настройки ленты → Инстаграм)');
+            return { ...hcfg, endpoint: pr.endpoint, apiKey: pr.apiKey, model: pr.model, quality: pr.quality, extraJson: pr.extraJson || '' };
+        }
+        if (!s.igImgEndpoint || !s.igImgKey || !s.igImgModel) throw new Error('для фото Инстаграма не заполнены адрес, ключ или модель (Настройки ленты → Инстаграм)');
+        return { ...hcfg, endpoint: s.igImgEndpoint.trim(), apiKey: s.igImgKey.trim(), model: s.igImgModel.trim(), quality: s.igImgQuality || 'auto', extraJson: '' };
+    }
+
+    function imageLabel(hcfg) {
+        const s = cfg();
+        if (s.igImgConn === 'custom') { try { return `${new URL(s.igImgEndpoint).host} · ${s.igImgModel || '?'}`; } catch { return 'свой адрес (не задан)'; } }
+        if (s.igImgConn === 'hprofile') { const pr = (hcfg?.profiles || []).find(x => x.id === s.igImgProfileId); return pr ? `профиль Hermes «${pr.name}» · ${pr.model}` : 'профиль Hermes не выбран'; }
+        return hcfg ? `как в Hermes Images · ${hcfg.model}` : 'как в Hermes Images';
+    }
+
     async function genImage(postId) {
         const post = feed()?.posts.find(p => p.id === postId);
         if (!post) return;
@@ -875,7 +911,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         }
         post.image.busy = true; post.image.error = ''; render();
         try {
-            const hcfg = settings.getCfg();
+            const hcfg = imageCfg(settings.getCfg(), post.net);
             const { prompt, useRefs } = buildImagePrompt(post.image.prompt, hcfg, post.net);
             let refs = [];
             if (useRefs) {
@@ -888,7 +924,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             save();
         } catch (e) {
             console.error('[world-feed] image', e);
-            const t = prov.describeError ? prov.describeError(e) : errText(e);
+            const t = (prov.describeError && e?.code !== undefined) ? prov.describeError(e) : errText(e);
             post.image.error = t;
             delete post.image.auto;
             toastr.error(t, 'Фото не сгенерировалось', { timeOut: 10000 });
@@ -1197,11 +1233,14 @@ ${igImage(p)}
 ${[...seen.values()].slice(0, 20).map(p => `<div class="wf-ig-story ${ui.tag === '@' + p.author ? 'on' : ''}" data-tag="@${esc(p.author)}"><span class="wf-ig-ring">${twAva(p.name || p.author)}</span><small>${esc(p.author)}</small></div>`).join('')}</div>`;
     }
 
+    let hiCfgCache = null;
+    import(HI_BASE + 'settings.js').then(m => { hiCfgCache = m.getCfg(); }).catch(() => { /* нет Hermes Images */ });
+
     function igSideHtml(posts) {
         const me = ctx().name1 || 'я';
         return `<div class="wf-card wf-pad wf-ig-me">${twAva(me, true)}<div><b>${esc(normHandle(translit(me)))}</b><br><span class="wf-muted">${esc(me)}</span></div></div>
 <div class="wf-card wf-pad wf-muted">Фото: стиль «снято на телефон», у каждого поста свой кадр; внешность героя игры подставляется, только если он назван в кадре. Сами рисуются ${Number(cfg().igAutoImages) || 0} новых поста за обновление, по одному, пока листаешь; остальные — по нажатию.</div>
-<div class="wf-card wf-pad wf-muted">🔌 ${esc(connLabel())}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
+<div class="wf-card wf-pad wf-muted">🔌 текст: ${esc(connLabel('insta'))}<br>🖼 фото: ${esc(imageLabel(hiCfgCache))}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
 <div class="wf-card wf-muted wf-pad">Лента в промпт ролевой игры не попадает. Хранится в этом чате.
 <br><br><button class="wf-linkbtn" data-act="clear">Очистить Инстаграм этого чата</button></div>`;
     }
@@ -1491,8 +1530,9 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
 
     function contextEstimate() {
         try {
-            const chars = worldContext().length;
-            return `≈ ${chars.toLocaleString('ru-RU')} симв. контекста (~${Math.round(chars / 3.5).toLocaleString('ru-RU')} ток.) на одно обновление`;
+            const chars = worldContext().length, lite = worldContext({ lite: true }).length;
+            const f = n => `${n.toLocaleString('ru-RU')} симв. (~${Math.round(n / 3.5).toLocaleString('ru-RU')} ток.)`;
+            return `≈ ${f(chars)} на обновление ленты · ≈ ${f(lite)} + сам тред на «ещё комментарии»`;
         } catch { return ''; }
     }
 
@@ -1548,7 +1588,42 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
   <section class="wf-card wf-set-card">
     <div class="wf-card-h">📸 Инстаграм</div>
     <div class="wf-pad">
-      <div class="wf-hint">Каждый пост — фото, его рисует расширение Hermes Images. Внешность персонажей берётся из последних картинок игры, люди всегда одеты по ситуации.</div>
+      <div class="wf-hint">Каждый пост — фото, его рисует расширение Hermes Images. Внешность героя игры подставляется, только если он назван в кадре; люди всегда одеты по ситуации.</div>
+
+      <div class="wf-sub-h">✍ Модель для текста постов Инстаграма</div>
+      <div class="wf-seg">
+        <label><input type="radio" name="wf_igtext" value="feed"> Как у всей ленты</label>
+        <label><input type="radio" name="wf_igtext" value="main"> Основное подключение чата</label>
+        <label><input type="radio" name="wf_igtext" value="profile"> Профиль подключения</label>
+        <label><input type="radio" name="wf_igtext" value="custom"> Свой API</label>
+      </div>
+      <div data-igt="profile"><label class="wf-f">Профиль из Connection Manager<select data-s="igProfileId">${profileOptions()}</select></label></div>
+      <div data-igt="custom">
+        <label class="wf-f">Адрес API (OpenAI-совместимый)<input data-s="igApiUrl" placeholder="https://api.example.com/v1"></label>
+        <label class="wf-f">Ключ<span class="wf-keyrow"><input data-s="igApiKey" type="password" autocomplete="off" placeholder="sk-…"><button class="wf-btn2" data-do="eye" data-for="igApiKey" title="Показать">👁</button></span></label>
+        <label class="wf-f">Модель<span class="wf-keyrow"><input data-s="igApiModel" list="wf_ig_models" placeholder="gemini-2.5-flash"><button class="wf-btn2" data-do="igModels">Список</button></span></label>
+        <datalist id="wf_ig_models"></datalist>
+        <label class="wf-f">Температура<input data-s="igTemperature" type="number" step="0.05" min="0" max="2"></label>
+      </div>
+      <div class="wf-row"><button class="wf-btn" data-do="igTest">Проверить текст</button><span class="wf-ig-test-out wf-muted"></span></div>
+
+      <div class="wf-sub-h">🖼 Модель для фото Инстаграма</div>
+      <div class="wf-seg">
+        <label><input type="radio" name="wf_igimg" value="hermes"> Как в Hermes Images</label>
+        <label><input type="radio" name="wf_igimg" value="hprofile"> Другой профиль Hermes Images</label>
+        <label><input type="radio" name="wf_igimg" value="custom"> Свой адрес и модель</label>
+      </div>
+      <div data-igi="hprofile"><label class="wf-f">Профиль Hermes Images<select data-s="igImgProfileId" class="wf-hprof"><option value="">— загружаю… —</option></select></label></div>
+      <div data-igi="custom">
+        <label class="wf-f">Адрес прокси картинок<input data-s="igImgEndpoint" placeholder="https://api.closerouter.dev/v1"></label>
+        <label class="wf-f">Ключ<span class="wf-keyrow"><input data-s="igImgKey" type="password" autocomplete="off" placeholder="sk-…"><button class="wf-btn2" data-do="eye" data-for="igImgKey" title="Показать">👁</button></span></label>
+        <label class="wf-f">Модель<span class="wf-keyrow"><input data-s="igImgModel" list="wf_ig_imgmodels" placeholder="openai/gpt-image-1-mini"><button class="wf-btn2" data-do="igImgModels">Список</button></span></label>
+        <datalist id="wf_ig_imgmodels"></datalist>
+        <label class="wf-f">Качество<select data-s="igImgQuality"><option value="auto">auto</option><option value="low">low (дёшево)</option><option value="medium">medium</option><option value="high">high</option></select></label>
+      </div>
+      <div class="wf-row"><button class="wf-btn" data-do="igImgTest">Проверить фото-подключение</button><span class="wf-ig-img-out wf-muted"></span></div>
+      <div class="wf-hint">Удобно поставить для инсты дешёвую модель или low-качество: картинок тут много, в игре — свои настройки и они не меняются.</div>
+
       <div class="wf-grid">
         <label class="wf-f">Рисовать самим за одно обновление (0 — только по нажатию)<input data-s="igAutoImages" type="number" min="0" max="15"></label>
       </div>
@@ -1578,6 +1653,8 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
       <label class="wf-f">Последних сообщений чата<input data-s="historyMessages" type="number" min="1" max="300"></label>
       <label class="wf-f">Не больше символов (0 — без лимита)<input data-s="historyMaxChars" type="number" min="0" max="500000" step="1000"></label>
       <label class="wf-chk"><input type="checkbox" data-s="includeCard"> Карточка персонажа и персона</label>
+      <label class="wf-f">Для «ещё комментариев»: сообщений чата (0 — только пост и тред)<input data-s="commentHistory" type="number" min="0" max="50"></label>
+      <label class="wf-chk"><input type="checkbox" data-s="commentCard"> Для комментариев тоже слать карточку и персону</label>
       <label class="wf-chk wf-span"><input type="checkbox" data-s="blockPlayer"> Персонаж игрока не пишет в ленту (посты и комменты от его ников удаляются)</label>
       <label class="wf-f wf-span">Другие имена персонажа игрока, через запятую<input data-s="playerAliases" placeholder="напр.: Kano, Канафинвэ, Makalaurë"></label>
       <div class="wf-hint wf-span wf-ctx-est"></div>
@@ -1607,13 +1684,22 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             else this.value = s[k] ?? '';
         });
         $p.find(`input[name="wf_conn"][value="${s.conn}"]`).prop('checked', true);
+        $p.find(`input[name="wf_igtext"][value="${s.igTextConn}"]`).prop('checked', true);
+        $p.find(`input[name="wf_igimg"][value="${s.igImgConn}"]`).prop('checked', true);
         syncConnVisibility($p);
+        import(HI_BASE + 'settings.js').then(m => {
+            const hc = m.getCfg(); hiCfgCache = hc;
+            $p.find('.wf-hprof').html('<option value="">— выбери профиль —</option>' + (hc.profiles || [])
+                .map(x => `<option value="${esc(x.id)}">${esc(x.name)} · ${esc(x.model || '?')}</option>`).join('')).val(s.igImgProfileId || '');
+        }).catch(() => $p.find('.wf-hprof').html('<option value="">Hermes Images не установлен</option>'));
         $p.find('.wf-ctx-est').text(contextEstimate());
     }
 
     function syncConnVisibility($p) {
         const conn = cfg().conn;
         $p.find('[data-show]').each(function () { this.style.display = this.dataset.show === conn ? '' : 'none'; });
+        $p.find('[data-igt]').each(function () { this.style.display = this.dataset.igt === cfg().igTextConn ? '' : 'none'; });
+        $p.find('[data-igi]').each(function () { this.style.display = this.dataset.igi === cfg().igImgConn ? '' : 'none'; });
     }
 
     let estTimer = 0, purgeTimer = 0;
@@ -1629,10 +1715,15 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             ctx().saveSettingsDebounced();
             if (k === 'showFab') placeFab();
             if (k === 'blockPlayer' || k === 'playerAliases') { clearTimeout(purgeTimer); purgeTimer = setTimeout(() => { const n = purgePlayer(); if (n) toastr.info(`Убрано записей от лица персонажа игрока: ${n}`, 'Лента мира'); }, 800); }
-            if (['historyMessages', 'historyMaxChars', 'includeCard'].includes(k)) {
+            if (['historyMessages', 'historyMaxChars', 'includeCard', 'commentHistory', 'commentCard'].includes(k)) {
                 clearTimeout(estTimer);
                 estTimer = setTimeout(() => $p.find('.wf-ctx-est').text(contextEstimate()), 250);
             }
+        });
+        $p.on('change', 'input[name="wf_igtext"], input[name="wf_igimg"]', function () {
+            cfg()[this.name === 'wf_igtext' ? 'igTextConn' : 'igImgConn'] = this.value;
+            ctx().saveSettingsDebounced();
+            syncConnVisibility($p);
         });
         $p.on('change', 'input[name="wf_conn"]', function () {
             cfg().conn = this.value;
@@ -1644,12 +1735,39 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             e.preventDefault();
             const act = this.dataset.do;
             if (act === 'eye') {
-                const inp = $p.find('[data-s="apiKey"]')[0];
+                const inp = $p.find(`[data-s="${this.dataset.for || 'apiKey'}"]`)[0];
                 inp.type = inp.type === 'password' ? 'text' : 'password';
             } else if (act === 'resetPrompt') {
                 cfg().systemPrompt = '';
                 $p.find('[data-s="systemPrompt"]').val(DEFAULT_SYSTEM_PROMPT);
                 ctx().saveSettingsDebounced();
+            } else if (act === 'igModels') {
+                const $out = $p.find('.wf-ig-test-out').text('загружаю модели…');
+                try {
+                    const ids = await listCustomModels(textConn('insta'));
+                    $p.find('#wf_ig_models').html(ids.map(id => `<option value="${esc(id)}">`).join(''));
+                    $out.text(`моделей: ${ids.length} — начни печатать в поле «Модель»`);
+                } catch (err) { $out.text('✖ ' + errText(err)); }
+            } else if (act === 'igTest') {
+                const $out = $p.find('.wf-ig-test-out').text('проверяю: ' + connLabel('insta') + '…');
+                const btn = this; btn.disabled = true; const t0 = Date.now();
+                try {
+                    const r = await callModel('Ответь одним словом.', 'Скажи «работает».', 300, 'insta');
+                    $out.html(`✔ ${esc(connLabel('insta'))} · ${((Date.now() - t0) / 1000).toFixed(1)} с · ответ: «${esc(String(r).trim().slice(0, 60))}»`);
+                } catch (err) { $out.text('✖ ' + errText(err)); } finally { btn.disabled = false; }
+            } else if (act === 'igImgModels' || act === 'igImgTest') {
+                const $out = $p.find('.wf-ig-img-out').text('проверяю…');
+                try {
+                    const prov = await import(HI_BASE + 'provider.js');
+                    const hs = await import(HI_BASE + 'settings.js');
+                    const hc = imageCfg(hs.getCfg(), 'insta');
+                    const r = await prov.listModels(hc);
+                    if (act === 'igImgModels') $p.find('#wf_ig_imgmodels').html(r.image.map(id => `<option value="${esc(id)}">`).join(''));
+                    const has = r.all.includes(hc.model);
+                    $out.html(`✔ ${esc(imageLabel(hc))} · ${r.ms} мс · моделей картинок: ${r.image.length}${act === 'igImgTest' ? (has ? ' · модель найдена' : ' · <span class="wf-err">модели «' + esc(hc.model) + '» в списке нет</span>') : ''}`);
+                } catch (err) {
+                    $out.text('✖ ' + (err?.message || errText(err)) + (err?.status ? ` (HTTP ${err.status})` : ''));
+                }
             } else if (act === 'resetPromptIg') {
                 cfg().systemPromptIg = '';
                 $p.find('[data-s="systemPromptIg"]').val(DEFAULT_IG_PROMPT);
@@ -1683,8 +1801,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         });
     }
 
-    async function listCustomModels() {
-        const s = cfg();
+    async function listCustomModels(s = textConn()) {
         if (!s.apiUrl) throw new Error('сначала укажи адрес API');
         const body = { chat_completion_source: 'custom', custom_url: joinApi(s.apiUrl, '') };
         if (s.apiKey) body.custom_include_headers = JSON.stringify({ Authorization: `Bearer ${String(s.apiKey).trim()}` });
@@ -1779,7 +1896,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);

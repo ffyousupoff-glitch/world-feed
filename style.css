@@ -369,3 +369,5 @@
 
 .wf-ig-save { filter: grayscale(1); opacity: .55; }
 .wf-ig-save.on { filter: none; opacity: 1; }
+
+.wf-sub-h { font-weight: 700; font-size: 13px; color: var(--wf-text); margin: 16px 0 8px; padding-top: 12px; border-top: 1px solid var(--wf-line); }
