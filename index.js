@@ -40,6 +40,9 @@
         net: 'reddit',          // открытая вкладка: reddit | twitter
         systemPromptTw: '',     // пусто = стандартный промт Твиттера
         autoReplies: true,      // на свой пост сразу приходят ответы
+        systemPromptIg: '',     // пусто = стандартный промт Инстаграма
+        igStyle: 'candid smartphone photo, shot on a phone camera, natural light, realistic, slightly imperfect framing, authentic social media snapshot',
+        igAutoImages: 3,        // сколько новых постов Инстаграма рисовать самим за одно обновление
     };
     const SETTINGS_VERSION = 4;
 
@@ -117,7 +120,9 @@
 
     const normUser = a => (String(a || 'anon').trim().replace(/^\/?u\//i, '') || 'anon');
     const normHandle = a => (String(a || 'anon').trim().replace(/^@+/, '').replace(/\s+/g, '_') || 'anon');
-    const netOf = () => (cfg().net === 'twitter' ? 'twitter' : 'reddit');
+    const NETS = ['reddit', 'twitter', 'insta'];
+    const netOf = () => (NETS.includes(cfg().net) ? cfg().net : 'reddit');
+    const isSocial = net => net === 'twitter' || net === 'insta'; // @handle + имя вместо u/
     const normSub = s => (String(s || 'world').trim().replace(/^\/?r\//i, '').replace(/\s+/g, '_') || 'world');
 
     // ---------- контекст для модели ----------
@@ -165,8 +170,8 @@
     function styleRules(net = netOf()) {
         const s = cfg();
         const c = ctx();
-        const tpl = net === 'twitter'
-            ? (String(s.systemPromptTw || '').trim() || DEFAULT_TW_PROMPT)
+        const tpl = net === 'twitter' ? (String(s.systemPromptTw || '').trim() || DEFAULT_TW_PROMPT)
+            : net === 'insta' ? (String(s.systemPromptIg || '').trim() || DEFAULT_IG_PROMPT)
             : (String(s.systemPrompt || '').trim() || DEFAULT_SYSTEM_PROMPT);
         return tpl.replace(/\{\{language\}\}/gi, s.language || 'русский')
             .replace(/\{\{user\}\}/gi, c.name1 || 'User')
@@ -196,6 +201,17 @@
 - Не пересказывай чат: пишущие знают о событиях из слухов, могут ошибаться и ссориться.
 - Язык текста: {{language}}. @handle — латиницей.
 - Персонаж игрока ({{user}}) НЕ пишет твитов и ответов: ни от своего имени, ни под любым ником. О нём можно только говорить и отмечать его в третьем лице.`;
+
+    const DEFAULT_IG_PROMPT = `Ты — генератор ленты вымышленного Инстаграма, который существует ВНУТРИ мира ролевой игры. Главный юмор: даже если в сеттинге нет телефонов (средневековье, эльфы, древность, космос), жители мира сидят в Инстаграме, снимают на телефон и ведут себя как типичный Инстаграм 2016–2024-х.
+
+Инстаграм — НЕ Реддит и НЕ Твиттер. Здесь всё вокруг КАРТИНКИ:
+- Каждый пост — одно фото, снятое на телефон. Подпись вторична: эстетика, хвастовство, «случайно» идеальная жизнь, мотивационные цитаты не к месту, «photo dump», «не я выбирал этот вайб», «как прошла моя неделя», завтрак сверху, закат, зеркальное селфи (полностью одетым), «кто узнал локацию?», реклама и коллаборации («промокод FEANOR10 на камни»), блогеры-путешественники, кулинарные аккаунты, официальные аккаунты домов и крепостей, фан-аккаунты, мемные страницы, «пост с намёком» после ссоры.
+- Подпись короткая или средняя, с эмодзи и 2–6 хэштегами в конце (внутримировые). Геометка — внутримировое место с лёгкой иронией.
+- Комментарии короткие: «😍😍😍», «мать», «кто фотографировал?», «а где ты был, когда...», пассивная агрессия, «прекрасно выглядишь» от тех, кто ненавидит, боты («Классный профиль! Напиши в директ 💸»), фанаты.
+- Персонажи сохраняют СВОИ характеры: гордый выкладывает пафосное фото с одним словом в подписи, тщеславный — двадцать селфи, мрачный — чёрно-белый пейзаж. Реагируют на реальные события последних сообщений ролевой игры, но через то, что выкладывают и о чём умалчивают.
+- Не пересказывай чат: подписчики знают о событиях из слухов.
+- Язык текста: {{language}}. @handle — латиницей. Описание фото (image_prompt) — на английском.
+- Персонаж игрока ({{user}}) НЕ публикует постов и не пишет комментариев. Его можно только упоминать, отмечать, и он может оказаться на чужом фото.`;
 
     const TWEET_REPLY_SCHEMA = `{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"body":"текст ответа","likes":число,"replies":[ ...такие же объекты, вложенность до 2 уровней... ]}`;
 
@@ -254,7 +270,7 @@
             for (let j = list.length - 1; j >= 0; j--) {
                 if (!style && list[j].style) style = list[j].style;
                 if (!chars) {
-                    const m = list[j].prompt.match(/Characters?\s*:\s*([\s\S]*?)(?=\b(?:Lighting|Location|Background(?: elements)?|Panels?(?:\s*\d)?|Composition|Camera|Mood|Atmosphere|Action|Scene)\s*:|ABSOLUTELY|$)/i);
+                    const m = list[j].prompt.match(/Characters?\s*:\s*([\s\S]*?)(?=\b(?:Lighting|Location|Setting|Layout|Background(?: elements)?|Panels?(?:\s*\d)?|Composition|Camera|Mood|Atmosphere|Action|Scene|Style|Format|Negative)\s*:|ABSOLUTELY|$)/i);
                     if (m && m[1].trim()) chars = stripPoses(m[1].trim());
                 }
             }
@@ -304,8 +320,32 @@ ${playerRule()}
 {"posts":[{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"body":"текст твита","image_prompt":"...","likes":число,"retweets":число,"replies":[${TWEET_REPLY_SCHEMA}]}]}`;
     }
 
+    /** Внешность персонажей для инсты — из тегов картинок игры. */
+    function igAppearance() {
+        const g = gameImageInfo();
+        return g.chars ? `\nВнешность героев ролевой игры (для справки: если герой в кадре — назови его по имени в image_prompt, внешность подставится сама; сам по умолчанию героев в кадр не ставь):\n${g.chars}\n` : '';
+    }
+
+    function igPrompt() {
+        const s = cfg();
+        const f = feed();
+        const recent = f.posts.filter(p => p.net === 'insta').slice(0, 12).map(p => `- @${p.author}: ${String(p.image?.prompt || '').slice(0, 70)} / ${String(p.body).slice(0, 50)}`).join('\n');
+        const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3);
+        return `${worldContext()}
+${igAppearance()}
+${recent ? `## Уже в ленте (не повторяй кадры)\n${recent}\n\n` : ''}## Задание
+Сгенерируй от ${min} до ${max} новых постов Инстаграма по свежим событиям ролевой игры. Разные аккаунты и типы кадров: селфи, портрет от друга, еда/стол сверху, пейзаж или вид из окна, предмет крупным планом, групповое фото, «случайный» кадр, скриншот-мем недопустим (на фото нет текста).
+image_prompt ОБЯЗАТЕЛЕН для каждого поста и у каждого свой: описание ОДНОГО фото НА АНГЛИЙСКОМ, 1–3 предложения, как реально снято на телефон ЭТИМ автором (ракурс, свет, что в кадре). Фото показывает жизнь и взгляд автора поста: его работу, еду, вещи, место, его самого или его знакомых. Героев ролевой игры в кадр ставь ТОЛЬКО если пост именно про встречу с ними (и называй их тогда по имени); в большинстве постов их в кадре нет. Не копируй сцены из чата и не делай коллажей. Люди в кадре полностью и уместно одеты по ситуации, обычное телосложение, никакого фансервиса, без голых торсов. На фото НЕТ надписей, текста и интерфейса.
+У каждого поста ${s.commentsPerPost} комментариев, ответы — редко.
+ДЛИНА: подпись не длиннее ${Math.min(400, s.maxPostChars)} символов, комментарий не длиннее ${Math.min(150, s.maxCommentChars)} символов.
+${playerRule()}
+Ответь ТОЛЬКО JSON без пояснений:
+{"posts":[{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"location":"геометка или пусто","image_prompt":"...","body":"подпись с хэштегами","likes":число,"replies":[${TWEET_REPLY_SCHEMA}]}]}`;
+    }
+
     function postsPrompt(net = netOf()) {
         if (net === 'twitter') return tweetsPrompt();
+        if (net === 'insta') return igPrompt();
         const s = cfg();
         const f = feed();
         const recent = f.posts.filter(p => p.net !== 'twitter').slice(0, 12).map(p => `- r/${p.sub}: ${p.title}`).join('\n');
@@ -342,8 +382,26 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
 {"new":[${TWEET_REPLY_SCHEMA}],"replies":[{"to":"точный handle автора, которому отвечают","to_text":"первые слова его ответа","comment":${TWEET_REPLY_SCHEMA}}]}`;
     }
 
+    function moreIgPrompt(post) {
+        return `${worldContext()}
+
+## Пост в Инстаграме
+${post.name || post.author} (@${post.author})${post.mine ? ' — это пост игрока' : ''}${post.location ? ` · 📍${post.location}` : ''}
+Фото: ${post.image?.prompt || '(фото)'}
+Подпись: ${post.body || ''}
+
+## Комментарии сейчас
+${threadToText(post.comments).replace(/u\//g, '@') || '(пока нет)'}
+
+## Задание
+Добавь ещё ${cfg().commentsPerPost} комментариев (каждый не длиннее ${Math.min(150, cfg().maxCommentChars)} символов): подписчики, друзья, завистники, фанаты, боты; отвечают автору и друг другу (особенно на комменты @${normHandle(translit(ctx().name1 || ''))}, если есть — ответь каждому).
+${playerRule()}Ответь ТОЛЬКО JSON:
+{"new":[${TWEET_REPLY_SCHEMA}],"replies":[{"to":"точный handle автора, которому отвечают","to_text":"первые слова его коммента","comment":${TWEET_REPLY_SCHEMA}}]}`;
+    }
+
     function morePrompt(post) {
         if (post.net === 'twitter') return moreTweetsPrompt(post);
+        if (post.net === 'insta') return moreIgPrompt(post);
         return `${worldContext()}
 
 ## Пост
@@ -556,6 +614,27 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         };
     }
 
+    function normIg(p) {
+        if (!p || !String(p.image_prompt || '').trim()) return null; // в инсте без фото поста нет
+        const aliases = playerAliases();
+        const nick = p.handle ?? p.author;
+        if (cfg().blockPlayer !== false && (isPlayerNick(nick, aliases) || (p.name && isPlayerNick(p.name, aliases)))) { dropped++; return null; }
+        const handle = normHandle(nick);
+        return {
+            id: uid(), net: 'insta', author: handle,
+            name: String(p.name || '').trim().slice(0, 50) || handle,
+            verified: !!p.verified,
+            location: String(p.location || '').trim().slice(0, 60),
+            sub: '', flair: '', title: '',
+            body: cap(p.body ?? p.caption ?? '', Math.min(400, cfg().maxPostChars)),
+            score: Number.isFinite(+p.likes) ? Math.round(+p.likes) : Math.floor(Math.random() * 3000),
+            ts: Date.now() - Math.floor(Math.random() * 60 * 60e3),
+            vote: 0,
+            image: { prompt: String(p.image_prompt).trim(), src: '' },
+            comments: (Array.isArray(p.replies ?? p.comments) ? (p.replies ?? p.comments) : []).map(x => normComment(x, aliases, true)).filter(Boolean),
+        };
+    }
+
     function normPost(p) {
         if (!p || !String(p.title || '').trim()) return null;
         const aliases = playerAliases();
@@ -589,7 +668,12 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             if (ctx().getCurrentChatId?.() !== chatId) return;
             dropped = 0;
             const raw = Array.isArray(data) ? data : data.posts || data.tweets || [];
-            const posts = raw.map(net === 'twitter' ? normTweet : normPost).filter(Boolean);
+            const posts = raw.map(net === 'twitter' ? normTweet : net === 'insta' ? normIg : normPost).filter(Boolean);
+            if (net === 'insta') {
+                // Сами рисуем первые N новых постов, по одному, когда они попадают на экран.
+                const n = Math.max(0, Number(cfg().igAutoImages) || 0);
+                posts.slice(0, n).forEach(p => { p.image.auto = true; });
+            }
             if (dropped) console.info(`[world-feed] убрано записей от лица персонажа игрока: ${dropped}`);
             if (!posts.length) throw new Error('в ответе нет постов');
             feed().posts.unshift(...posts);
@@ -597,6 +681,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             save();
             if (!isOpen) setBadge(posts.length);
             toastr.success(net === 'twitter' ? `Новых твитов: ${posts.length}` : `Новых постов: ${posts.length}`, 'Лента мира');
+            if (net === 'insta' && posts.length < raw.length) console.info(`[world-feed] постов инсты без фото отброшено: ${raw.length - posts.length - dropped}`);
         } catch (e) {
             console.error('[world-feed]', e);
             toastr.error(errText(e), 'Лента не обновилась', { timeOut: 10000 });
@@ -631,8 +716,8 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         if (!post || postBusy.has(postId)) return;
         postBusy.add(postId); render();
         try {
-            const tw = post.net === 'twitter';
-            const data = await ask(morePrompt(post), tw ? 'twitter' : 'reddit');
+            const tw = isSocial(post.net);
+            const data = await ask(morePrompt(post), post.net || 'reddit');
             if (ctx().getCurrentChatId?.() !== chatId) return;
             let added = 0;
             dropped = 0;
@@ -680,11 +765,38 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     const NO_TEXT = 'No text, captions, UI, logos or watermarks.';
 
     /** Итоговый промт для фото поста в зависимости от режима. */
-    function buildImagePrompt(scene, hcfg) {
+    /** Блок «Characters:» → [{names:[...], text}] по одному персонажу. */
+    function splitCharacters(chars) {
+        return String(chars || '').split(/;\s*/).map(x => x.trim()).filter(Boolean).map(text => {
+            const head = text.split(',')[0];
+            const names = [head.replace(/\(.*?\)/g, ''), ...(head.match(/\(([^)]+)\)/g) || []).map(x => x.slice(1, -1))]
+                .flatMap(n => [n, ...n.split(/\s+/)]).map(n => n.trim()).filter(n => n.length >= 3 && !/^(the|and|male|female|young|old|elf|man|woman|canon|lady|lord|sir)$/i.test(n));
+            return { names: [...new Set(names)], text };
+        });
+    }
+
+    /** Только те персонажи игры, кого описание кадра называет по имени. */
+    function charsInScene(scene, chars) {
+        const low = ' ' + String(scene).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ') + ' ';
+        return splitCharacters(chars).filter(c => c.names.some(n => low.includes(' ' + n.toLowerCase() + ' ')));
+    }
+
+    function buildImagePrompt(scene, hcfg, net) {
         const s = cfg();
         const parts = [];
         let useRefs = false;
-        if (s.imageMode === 'nopeople') {
+        if (net === 'insta') {
+            // Кадр — только то, что описано для ЭТОГО поста. Никаких картинок игры как образца
+            // (это комикс-страницы: рисовалка копирует их раскладку и героев) и никаких чужих героев.
+            const who = charsInScene(scene, gameImageInfo().chars);
+            parts.push(`Style: ${s.igStyle || DEFAULTS.igStyle}.`);
+            parts.push(`ONE single photograph taken on a smartphone and posted to Instagram. Photographic and realistic — not a painting, not an illustration, not a comic, not a collage, no panels, no split frames, no multiple shots. Vertical 4:5 framing.`);
+            parts.push(scene);
+            if (who.length) parts.push(`Appearance of the named people in this photo (render them as real people; keep faces, hair, ears and distinctive marks; clothing and pose follow the scene above, not this note):\n${who.map(c => c.text).join('\n')}`);
+            else parts.push('Show only who and what the scene describes; no other recognizable characters.');
+            parts.push(DRESSED + ' ' + NO_TEXT);
+            useRefs = false;
+        } else if (s.imageMode === 'nopeople') {
             if (s.imageStyle) parts.push(`Style: ${s.imageStyle}`);
             parts.push(scene);
             parts.push('NO people, no humans, no faces, no bodies in the frame — only the place, objects, animals or aftermath. ' + NO_TEXT);
@@ -713,11 +825,41 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         return { prompt, useRefs };
     }
 
+    // Очередь автоотрисовки Инстаграма: строго по одному, только то, что докрутили.
+    const drawQueue = [];
+    let drawing = false, io = null;
+    function queueDraw(id) {
+        if (drawQueue.includes(id)) return;
+        drawQueue.push(id);
+        pumpDraw();
+    }
+    async function pumpDraw() {
+        if (drawing) return;
+        drawing = true;
+        try {
+            while (drawQueue.length) {
+                const id = drawQueue.shift();
+                const p = feed()?.posts.find(x => x.id === id);
+                if (p?.image?.auto && !p.image.src && !p.image.busy) await genImage(id);
+            }
+        } finally { drawing = false; }
+    }
+    function watchAutoImages() {
+        const els = $win?.find('[data-auto="1"]').toArray() || [];
+        if (!els.length) return;
+        if (typeof IntersectionObserver === 'undefined') { els.forEach(el => queueDraw(el.dataset.path)); return; }
+        io ??= new IntersectionObserver(entries => {
+            for (const e of entries) if (e.isIntersecting) { io.unobserve(e.target); queueDraw(e.target.dataset.path); }
+        }, { root: $win.find('.wf-feed')[0], rootMargin: '200px' });
+        els.forEach(el => io.observe(el));
+    }
+
     async function genImage(postId) {
         const post = feed()?.posts.find(p => p.id === postId);
         if (!post) return;
         if (!post.image) post.image = { prompt: '', src: '' };
         if (!post.image.prompt) {
+            if (post.image.auto) return; // автозапуск без промта не спрашивает
             const p = await ctx().Popup.show.input('Фото к посту', 'Что на снимке? (лучше по-английски)', post.title || String(post.body || '').slice(0, 120));
             if (!p) return;
             post.image.prompt = p;
@@ -728,24 +870,27 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             prov = await import(HI_BASE + 'provider.js');
             settings = await import(HI_BASE + 'settings.js');
         } catch (e) {
+            delete post.image.auto; save(); render(); // иначе автоочередь будет пробовать снова на каждой перерисовке
             return toastr.error('Нужно расширение Hermes Images — оно рисует картинки. ' + errText(e), 'Лента мира');
         }
         post.image.busy = true; post.image.error = ''; render();
         try {
             const hcfg = settings.getCfg();
-            const { prompt, useRefs } = buildImagePrompt(post.image.prompt, hcfg);
+            const { prompt, useRefs } = buildImagePrompt(post.image.prompt, hcfg, post.net);
             let refs = [];
             if (useRefs) {
                 try { refs = await (await import(HI_BASE + 'refs.js')).collectRefs(hcfg); }
                 catch (e) { console.warn('[world-feed] refs', e); }
             }
-            const dataUrl = await prov.generateImage({ prompt, aspect: '4:3', refs, cfg: hcfg });
+            const dataUrl = await prov.generateImage({ prompt, aspect: post.net === 'insta' ? '4:5' : '4:3', refs, cfg: hcfg });
             post.image.src = await uploadImage(dataUrl);
+            delete post.image.auto;
             save();
         } catch (e) {
             console.error('[world-feed] image', e);
             const t = prov.describeError ? prov.describeError(e) : errText(e);
             post.image.error = t;
+            delete post.image.auto;
             toastr.error(t, 'Фото не сгенерировалось', { timeOut: 10000 });
         } finally {
             delete post.image.busy; save(); render();
@@ -758,10 +903,10 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     let isOpen = false;
     const ui = { open: new Set(), expanded: new Set(), sub: '', tag: '', sort: 'new', composing: false };
 
-    const unseen = { reddit: 0, twitter: 0 }; // посты, пришедшие в фоновую вкладку
+    const unseen = { reddit: 0, twitter: 0, insta: 0 }; // посты, пришедшие в фоновую вкладку
 
     function switchNet(net) {
-        net = net === 'twitter' ? 'twitter' : 'reddit';
+        net = NETS.includes(net) ? net : 'reddit';
         if (cfg().net === net) return;
         cfg().net = net;
         ctx().saveSettingsDebounced();
@@ -782,6 +927,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
       <div class="wf-tabs">
         <div class="wf-tab" data-net="reddit" title="reddit.world"><span class="wf-fav wf-fav-r">👽</span><span class="wf-tab-t">Reddit — главная мира</span><span class="wf-tab-badge"></span></div>
         <div class="wf-tab" data-net="twitter" title="x.world"><span class="wf-fav wf-fav-x">𝕏</span><span class="wf-tab-t">Главная / X</span><span class="wf-tab-badge"></span></div>
+        <div class="wf-tab" data-net="insta" title="instagram.world"><span class="wf-fav wf-fav-ig">◎</span><span class="wf-tab-t">Instagram</span><span class="wf-tab-badge"></span></div>
         <span class="wf-tab-plus" title="Новых соцсетей в этом мире пока не изобрели">+</span>
       </div>
       <span class="wf-close" title="Закрыть">✕</span>
@@ -857,7 +1003,9 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
 
     function sorted(posts) {
         const net = netOf();
-        const arr = posts.filter(p => p.net === net && (net === 'twitter'
+        const arr = posts.filter(p => p.net === net && (net === 'insta'
+            ? (!ui.tag || (ui.tag.startsWith('@') ? p.author === ui.tag.slice(1) : tagsOf(p.body).includes(ui.tag)))
+            : net === 'twitter'
             ? (!ui.tag || tagsOf(p.body).includes(ui.tag))
             : (!ui.sub || p.sub === ui.sub)));
         if (ui.sort === 'top') return arr.sort((a, b) => (b.score + b.vote) - (a.score + a.vote));
@@ -992,9 +1140,86 @@ ${twAva(p.name || p.author, true)}
 </div></article>`;
     }
 
+    function igImage(p) {
+        const im = p.image || {};
+        if (im.src) return `<div class="wf-ig-photo"><img src="${esc(im.src)}" data-act="zoom" data-path="${p.id}" loading="lazy" alt=""></div>`;
+        if (im.busy) return `<div class="wf-ig-photo wf-ig-ph"><span class="wf-spin"></span><small>проявляется…</small></div>`;
+        return `<div class="wf-ig-photo wf-ig-ph" data-act="img" data-path="${p.id}" ${im.auto ? 'data-auto="1"' : ''} title="${esc(im.prompt)}">
+<span class="wf-ig-cam">📷</span><small>${esc(String(im.prompt || '').slice(0, 180))}</small>
+${im.error ? `<small class="wf-err">${esc(im.error)}</small>` : ''}<u>${im.auto ? 'в очереди…' : 'нажми, чтобы проявить фото'}</u></div>`;
+    }
+
+    function igCommentHtml(c, postId) {
+        const path = `${postId}|${c.id}`;
+        return `<div class="wf-ig-c" data-cid="${c.id}">${twAva(c.name || c.author)}
+<div class="wf-tw-main"><div><b class="${c.mine ? 'wf-me' : ''}">${esc(c.author)}</b>${c.verified ? '<span class="wf-tw-check">✓</span>' : ''} ${twText(c.body)}</div>
+<div class="wf-ig-cmeta"><span>${ago(c.ts)}</span><span>${fmtScore((c.score || 0) + (c.vote > 0 ? 1 : 0))} отметок «Нравится»</span>
+<button data-act="reply" data-path="${path}">Ответить</button><button data-act="delc" data-path="${path}" title="Удалить">🗑</button></div>
+<div class="wf-reply-slot"></div>
+${(c.replies || []).map(r => igCommentHtml(r, postId)).join('')}</div>
+<button class="wf-ig-heart ${c.vote > 0 ? 'wf-liked' : ''}" data-act="up" data-path="${path}">${c.vote > 0 ? '❤' : '♡'}</button></div>`;
+    }
+
+    function igHtml(p) {
+        const open = ui.open.has(p.id);
+        const n = countComments(p.comments);
+        const liked = p.vote > 0;
+        return `<article class="wf-ig" data-pid="${p.id}">
+<div class="wf-ig-head"><span class="wf-ig-ring">${twAva(p.name || p.author)}</span>
+  <div class="wf-ig-who"><b class="${p.mine ? 'wf-me' : ''}">${esc(p.author)}</b>${p.verified ? '<span class="wf-tw-check">✓</span>' : ''}<span class="wf-muted"> · ${ago(p.ts)}</span>${p.location ? `<br><small>${esc(p.location)}</small>` : ''}</div>
+  <button class="wf-ig-more" data-act="delp" data-path="${p.id}" title="Удалить пост">🗑</button></div>
+${igImage(p)}
+<div class="wf-ig-actions">
+  <button data-act="up" data-path="${p.id}" class="${liked ? 'wf-liked' : ''}" title="Нравится">${liked ? '❤' : '♡'}</button>
+  <button data-act="toggle" data-path="${p.id}" title="Комментарии">💬</button>
+  <button data-act="award" data-path="${p.id}" title="Отправить">✈</button>
+  ${p.image?.src ? `<button data-act="reimg" data-path="${p.id}" title="Переснять фото">🔄</button>` : ''}
+  <button data-act="rt" data-path="${p.id}" class="wf-ig-save ${p.rt ? 'on' : ''}" title="Сохранить">🔖</button>
+</div>
+<div class="wf-ig-text">
+  <b>${fmtScore((p.score || 0) + (liked ? 1 : 0))} отметок «Нравится»</b>
+  ${p.body ? `<div><b>${esc(p.author)}</b> ${twText(p.body)}</div>` : ''}
+  ${n && !open ? `<button class="wf-ig-all" data-act="toggle" data-path="${p.id}">Посмотреть все комментарии (${n})</button>` : ''}
+  ${open ? `<div class="wf-ig-thread">
+    ${p.comments.map(c => igCommentHtml(c, p.id)).join('') || '<div class="wf-muted">Комментариев пока нет.</div>'}
+    <div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${p.id}" placeholder="Добавьте комментарий… (Ctrl+Enter)"></textarea>
+      <button data-act="send" data-path="${p.id}">Опубликовать</button></div>
+    <button class="wf-more" data-act="more" data-path="${p.id}" ${postBusy.has(p.id) ? 'disabled' : ''}>${postBusy.has(p.id) ? '<span class="wf-spin"></span> печатают…' : '⬇ Ещё комментарии'}</button>
+  </div>` : ''}
+</div></article>`;
+    }
+
+    function storiesHtml(posts) {
+        const seen = new Map();
+        for (const p of posts) if (!seen.has(p.author)) seen.set(p.author, p);
+        if (!seen.size) return '';
+        return `<div class="wf-ig-stories"><div class="wf-ig-story ${ui.tag ? '' : 'on'}" data-tag=""><span class="wf-ig-ring"><span class="wf-tw-ava" style="background:#262626">⌂</span></span><small>Все</small></div>
+${[...seen.values()].slice(0, 20).map(p => `<div class="wf-ig-story ${ui.tag === '@' + p.author ? 'on' : ''}" data-tag="@${esc(p.author)}"><span class="wf-ig-ring">${twAva(p.name || p.author)}</span><small>${esc(p.author)}</small></div>`).join('')}</div>`;
+    }
+
+    function igSideHtml(posts) {
+        const me = ctx().name1 || 'я';
+        return `<div class="wf-card wf-pad wf-ig-me">${twAva(me, true)}<div><b>${esc(normHandle(translit(me)))}</b><br><span class="wf-muted">${esc(me)}</span></div></div>
+<div class="wf-card wf-pad wf-muted">Фото: стиль «снято на телефон», у каждого поста свой кадр; внешность героя игры подставляется, только если он назван в кадре. Сами рисуются ${Number(cfg().igAutoImages) || 0} новых поста за обновление, по одному, пока листаешь; остальные — по нажатию.</div>
+<div class="wf-card wf-pad wf-muted">🔌 ${esc(connLabel())}<br><button class="wf-linkbtn wf-blue" data-act="settings">⚙ Настройки ленты</button></div>
+<div class="wf-card wf-muted wf-pad">Лента в промпт ролевой игры не попадает. Хранится в этом чате.
+<br><br><button class="wf-linkbtn" data-act="clear">Очистить Инстаграм этого чата</button></div>`;
+    }
+
     /** Форма своего поста: на Реддите — по кнопке «✏ Пост», в Твиттере — всегда сверху ленты. */
     function composerHtml(all) {
         const me = esc(ctx().name1 || 'я');
+        if (netOf() === 'insta') {
+            if (!ui.composing) return '';
+            return `<div class="wf-newpost wf-card wf-pad wf-ig-new">
+<div class="wf-row"><b>Новая публикация</b><button class="wf-linkbtn wf-x" data-act="compose" title="Отмена">✕</button></div>
+<label class="wf-f">Фото: загрузить своё<input type="file" accept="image/*" class="wf-new-file"></label>
+<label class="wf-f">…или описать, и его проявят (лучше по-английски)<textarea class="wf-new-photo" rows="2" placeholder="Maglor on a cliff at dusk, harp on his back, wind in his hair"></textarea></label>
+<label class="wf-f">Подпись<textarea class="wf-new-body" rows="3" placeholder="не спрашивайте 🌊 #Балар"></textarea></label>
+<label class="wf-f">Геометка<input class="wf-new-sub" placeholder="📍 Устье Сириона"></label>
+<div class="wf-row"><button class="wf-btn" data-act="publish">Поделиться</button>
+<span class="wf-muted">${cfg().autoReplies !== false ? 'подписчики сразу начнут комментировать' : ''}</span></div></div>`;
+        }
         if (netOf() === 'twitter') {
             return `<div class="wf-tw-compose">${twAva(ctx().name1, true)}
 <div class="wf-tw-main"><textarea class="wf-tw-input" rows="2" placeholder="Что происходит, ${me}?"></textarea>
@@ -1020,7 +1245,23 @@ ${twAva(p.name || p.author, true)}
         const tw = netOf() === 'twitter';
         const $box = $btn.closest('.wf-newpost, .wf-tw-compose');
         let post;
-        if (tw) {
+        if (netOf() === 'insta') {
+            const file = $box.find('.wf-new-file')[0]?.files?.[0];
+            const desc = String($box.find('.wf-new-photo').val() || '').trim();
+            if (!file && !desc) return toastr.warning('В Инстаграме без фото нельзя: загрузи или опиши его.', 'Лента мира');
+            let src = '';
+            if (file) {
+                try {
+                    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+                    src = await uploadImage(dataUrl);
+                } catch (e) { return toastr.error(errText(e), 'Фото не загрузилось'); }
+            }
+            post = { id: uid(), net: 'insta', mine: true, author: normHandle(translit(c.name1 || 'me')), name: c.name1 || 'я', verified: false,
+                location: String($box.find('.wf-new-sub').val() || '').replace(/^📍\s*/, '').trim(), sub: '', flair: '', title: '',
+                body: String($box.find('.wf-new-body').val() || '').trim(), score: 0, ts: Date.now(), vote: 0,
+                image: { prompt: desc || '(своё фото)', src, auto: !src }, comments: [] };
+            ui.composing = false;
+        } else if (tw) {
             const body = String($box.find('.wf-tw-input').val() || '').trim();
             if (!body) return;
             if (body.length > 280) return toastr.warning(`Длиннее 280 символов на ${body.length - 280}. Это Твиттер, а не летопись.`, 'Лента мира');
@@ -1076,7 +1317,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
 
     function renderBusy() {
         if (!$win) return;
-        const label = busy === 'twitter' ? 'Мир твитит…' : 'Мир пишет посты…';
+        const label = ({ twitter: 'Мир твитит…', insta: 'Мир выбирает фильтр…' })[busy] || 'Мир пишет посты…';
         $win.find('.wf-tab').each(function () { $(this).toggleClass('wf-loading', busy === this.dataset.net); });
         $win.find('.wf-refresh').prop('disabled', !!busy).html(busy ? `<span class="wf-spin"></span> ${label}` : '⟳ Обновить ленту');
     }
@@ -1088,10 +1329,11 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         const scroll = $feed.scrollTop();
         const drafts = {};
         $win.find('.wf-reply-input').each(function () { if (this.value) drafts[this.dataset.path] = this.value; });
-        const tw = netOf() === 'twitter';
-        $win.toggleClass('wf-tw', tw);
+        const net = netOf();
+        const tw = net === 'twitter', ig = net === 'insta';
+        $win.toggleClass('wf-tw', tw || ig).toggleClass('wf-igm', ig);
         $win.find('[data-net]').each(function () { $(this).toggleClass('on', this.dataset.net === netOf()); });
-        $win.find('.wf-logo').html(tw ? '<span class="wf-xlogo">𝕏</span>' : '<span class="wf-snoo">👽</span> <b>reddit</b><small>.world</small>');
+        $win.find('.wf-logo').html(ig ? '<span class="wf-iglogo">Instagram</span>' : tw ? '<span class="wf-xlogo">𝕏</span>' : '<span class="wf-snoo">👽</span> <b>reddit</b><small>.world</small>');
         $win.find('.wf-tab[data-net="reddit"] .wf-tab-t').text(ui.sub && !tw ? `r/${ui.sub}` : 'Reddit — главная мира');
         $win.find('.wf-tab[data-net="twitter"] .wf-tab-t').text(ui.tag && tw ? `${ui.tag} — поиск / X` : 'Главная / X');
         $win.find('.wf-tab').each(function () {
@@ -1099,13 +1341,15 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             $(this).find('.wf-tab-badge').text(n || '').toggle(!!n);
         });
         unseen[netOf()] = 0;
-        $win.find('#wf_url_host').text(tw ? 'https://x.world/' : 'https://www.reddit.world/');
-        $win.find('#wf_url_sub').text(tw ? (ui.tag ? `search?q=${ui.tag}` : 'home') : (ui.sub ? `r/${ui.sub}/` : ''));
-        $win.find('.wf-sort').html(tw
+        $win.find('.wf-tab[data-net="insta"] .wf-tab-t').text(ig && ui.tag ? `${ui.tag.replace(/^@/, '')} • Instagram` : 'Instagram');
+        $win.find('#wf_url_host').text(ig ? 'https://www.instagram.world/' : tw ? 'https://x.world/' : 'https://www.reddit.world/');
+        $win.find('#wf_url_sub').text(ig ? (ui.tag.startsWith('@') ? ui.tag.slice(1) + '/' : ui.tag ? `explore/tags/${ui.tag.slice(1)}/` : '')
+            : tw ? (ui.tag ? `search?q=${ui.tag}` : 'home') : (ui.sub ? `r/${ui.sub}/` : ''));
+        $win.find('.wf-sort').html(ig ? '' : tw
             ? '<button data-sort="hot">Для вас</button><button data-sort="new">Последнее</button><button data-sort="top">Топ</button>'
             : '<button data-sort="new">🆕 Новое</button><button data-sort="hot">🔥 Горячее</button><button data-sort="top">🏆 Топ</button>');
         $win.find('[data-sort]').each(function () { $(this).toggleClass('on', this.dataset.sort === ui.sort); });
-        $win.find('.wf-compose-btn').toggle(!tw).toggleClass('on', ui.composing);
+        $win.find('.wf-compose-btn').toggle(!tw).toggleClass('on', ui.composing).html(ig ? '⊕ Публикация' : '✏ Пост');
         renderBusy();
         if (!f) {
             $feed.html('<div class="wf-empty">Открой чат — у каждого чата своя лента.</div>');
@@ -1116,11 +1360,13 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         $win.find('.wf-new-sub, .wf-new-title, .wf-new-body, .wf-tw-input').each(function () { keep[this.className] = this.value; });
         const posts = sorted(f.posts);
         const mine = f.posts.filter(p => p.net === netOf());
-        const empty = tw
+        const empty = ig ? `<div class="wf-empty">◎<br>Ни одной фотографии.<br>Нажми «Обновить ленту» — и мир начнёт выкладывать, что у вас стряслось, в лучшем свете.</div>`
+            : tw
             ? `<div class="wf-empty">𝕏<br>Тишина в ленте.<br>Нажми «Обновить ленту» — и мир начнёт твитить о том, что у вас стряслось.</div>`
             : `<div class="wf-empty">👽<br>Здесь пока пусто.<br>Нажми «Обновить ленту» — и жители мира начнут обсуждать, что у вас стряслось.</div>`;
-        $feed.html(composerHtml(f.posts) + (posts.length ? posts.map(tw ? tweetHtml : postHtml).join('') : empty));
-        $win.find('.wf-side').html(tw ? trendsHtml(mine) : sideHtml(mine));
+        $feed.html((ig ? storiesHtml(mine) : '') + composerHtml(f.posts) + (posts.length ? posts.map(ig ? igHtml : tw ? tweetHtml : postHtml).join('') : empty));
+        $win.find('.wf-side').html(ig ? igSideHtml(mine) : tw ? trendsHtml(mine) : sideHtml(mine));
+        if (ig) watchAutoImages();
         $win.find('.wf-reply-input').each(function () { if (drafts[this.dataset.path]) this.value = drafts[this.dataset.path]; });
         $win.find('.wf-new-sub, .wf-new-title, .wf-new-body, .wf-tw-input').each(function () { if (keep[this.className] !== undefined) this.value = keep[this.className]; });
         $feed.scrollTop(scroll);
@@ -1169,6 +1415,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 break;
             case 'collapse': if (comment) comment.collapsed = !comment.collapsed; break;
             case 'award':
+                if (post.net === 'insta') { toastr.info('Отправлено в директ. Прочитано, без ответа.', `@${post.author}`); return; }
                 post.awards = (post.awards || 0) + 1;
                 toastr.info('edit: спасибо за награду, добрый незнакомец 🏅', `u/${post.author}`);
                 break;
@@ -1178,9 +1425,9 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             case 'more': return moreComments(post.id);
             case 'settings': return toggleSettings(true);
             case 'reply': {
-                const $slot = $(this).closest('.wf-c-main').children('.wf-reply-slot');
+                const $slot = $(this).closest('.wf-c-main, .wf-tw-main').children('.wf-reply-slot');
                 if ($slot.children().length) { $slot.empty(); return; }
-                $slot.html(`<div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${path}" placeholder="Ответ ${post.net === 'twitter' ? '@' : 'u/'}${esc(comment.author)}…"></textarea>
+                $slot.html(`<div class="wf-composer sm"><textarea class="wf-reply-input" data-path="${path}" placeholder="Ответ ${isSocial(post.net) ? '@' : 'u/'}${esc(comment.author)}…"></textarea>
 <button data-act="send" data-path="${path}">Ответить</button></div>`);
                 $slot.find('textarea').trigger('focus');
                 return;
@@ -1189,13 +1436,13 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 const $ta = $(this).siblings('.wf-reply-input');
                 const text = String($ta.val() || '').trim();
                 if (!text) return;
-                const mine = post.net === 'twitter'
+                const mine = isSocial(post.net)
                     ? { id: uid(), author: normHandle(translit(ctx().name1 || 'me')), name: ctx().name1 || 'я', flair: '', body: text, score: 0, ts: Date.now(), replies: [], mine: true }
                     : { id: uid(), author: normUser(ctx().name1), flair: '', body: text, score: 1, ts: Date.now(), replies: [], mine: true };
                 (comment ? comment.replies : post.comments).push(mine);
                 $ta.val('');
                 save(); render();
-                toastr.info(post.net === 'twitter' ? 'Жми «Ещё ответы» — тебе ответят.' : 'Жми «Загрузить ещё комментарии» — тебе ответят.', 'Опубликовано', { timeOut: 3000 });
+                toastr.info(isSocial(post.net) ? 'Жми «Ещё» — тебе ответят.' : 'Жми «Загрузить ещё комментарии» — тебе ответят.', 'Опубликовано', { timeOut: 3000 });
                 return;
             }
             case 'delc': if (comment) parentList.splice(parentList.indexOf(comment), 1); break;
@@ -1207,7 +1454,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             }
             case 'clear': {
                 const net = netOf();
-                const ok = await ctx().Popup.show.confirm(`Очистить ${net === 'twitter' ? 'Твиттер' : 'Реддит'}?`, 'Все посты этой вкладки в этом чате будут удалены. Вторая вкладка останется.');
+                const ok = await ctx().Popup.show.confirm(`Очистить ${({ twitter: 'Твиттер', insta: 'Инстаграм' })[net] || 'Реддит'}?`, 'Все посты этой вкладки в этом чате будут удалены. Вторая вкладка останется.');
                 if (!ok) return;
                 feed().posts = feed().posts.filter(p => p.net !== net);
                 break;
@@ -1299,6 +1546,21 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
   </section>
 
   <section class="wf-card wf-set-card">
+    <div class="wf-card-h">📸 Инстаграм</div>
+    <div class="wf-pad">
+      <div class="wf-hint">Каждый пост — фото, его рисует расширение Hermes Images. Внешность персонажей берётся из последних картинок игры, люди всегда одеты по ситуации.</div>
+      <div class="wf-grid">
+        <label class="wf-f">Рисовать самим за одно обновление (0 — только по нажатию)<input data-s="igAutoImages" type="number" min="0" max="15"></label>
+      </div>
+      <label class="wf-f">Стиль фото (английский)<input data-s="igStyle"></label>
+      <div class="wf-row"><button class="wf-btn2" data-do="resetIgStyle">Вернуть «снято на телефон»</button></div>
+      <label class="wf-f" style="margin-top:12px">Промт Инстаграма</label>
+      <textarea data-s="systemPromptIg" class="wf-prompt" rows="14"></textarea>
+      <div class="wf-row"><button class="wf-btn2" data-do="resetPromptIg">Вернуть стандартный</button></div>
+    </div>
+  </section>
+
+  <section class="wf-card wf-set-card">
     <div class="wf-card-h">📰 Посты</div>
     <div class="wf-pad wf-grid">
       <label class="wf-f">Постов за раз, от<input data-s="postsMin" type="number" min="1" max="15"></label>
@@ -1341,6 +1603,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             if (this.type === 'checkbox') this.checked = s[k] !== false && !!s[k];
             else if (k === 'systemPrompt') this.value = s.systemPrompt || DEFAULT_SYSTEM_PROMPT;
             else if (k === 'systemPromptTw') this.value = s.systemPromptTw || DEFAULT_TW_PROMPT;
+            else if (k === 'systemPromptIg') this.value = s.systemPromptIg || DEFAULT_IG_PROMPT;
             else this.value = s[k] ?? '';
         });
         $p.find(`input[name="wf_conn"][value="${s.conn}"]`).prop('checked', true);
@@ -1360,7 +1623,8 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             const k = this.dataset.s;
             let v = this.type === 'checkbox' ? this.checked : this.type === 'number' ? Number(this.value) : this.value;
             if (k === 'systemPrompt' && String(v).trim() === DEFAULT_SYSTEM_PROMPT.trim()) v = '';
-            if (k === 'systemPromptTw' && String(v).trim() === DEFAULT_TW_PROMPT.trim()) v = ''; // стандартный = пусто, чтобы обновлялся вместе с расширением
+            if (k === 'systemPromptTw' && String(v).trim() === DEFAULT_TW_PROMPT.trim()) v = '';
+            if (k === 'systemPromptIg' && String(v).trim() === DEFAULT_IG_PROMPT.trim()) v = ''; // стандартный = пусто, чтобы обновлялся вместе с расширением
             s[k] = v;
             ctx().saveSettingsDebounced();
             if (k === 'showFab') placeFab();
@@ -1385,6 +1649,14 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
             } else if (act === 'resetPrompt') {
                 cfg().systemPrompt = '';
                 $p.find('[data-s="systemPrompt"]').val(DEFAULT_SYSTEM_PROMPT);
+                ctx().saveSettingsDebounced();
+            } else if (act === 'resetPromptIg') {
+                cfg().systemPromptIg = '';
+                $p.find('[data-s="systemPromptIg"]').val(DEFAULT_IG_PROMPT);
+                ctx().saveSettingsDebounced();
+            } else if (act === 'resetIgStyle') {
+                cfg().igStyle = DEFAULTS.igStyle;
+                $p.find('[data-s="igStyle"]').val(DEFAULTS.igStyle);
                 ctx().saveSettingsDebounced();
             } else if (act === 'resetPromptTw') {
                 cfg().systemPromptTw = '';
@@ -1428,7 +1700,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
     function mountSettings() {
         const $s = $(`
 <div class="inline-drawer wf-settings">
-  <div class="inline-drawer-toggle inline-drawer-header"><b>📰 Лента мира (Reddit + Twitter)</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+  <div class="inline-drawer-toggle inline-drawer-header"><b>📰 Лента мира (Reddit · Twitter · Instagram)</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
   <div class="inline-drawer-content">
     <div class="flex-container">
       <button class="menu_button" id="wf_open_btn">Открыть ленту</button>
@@ -1507,7 +1779,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);
