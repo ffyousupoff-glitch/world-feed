@@ -1664,6 +1664,10 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
 
     function render() {
         if (!$win || !isOpen) return;
+        if (ui.dmView && ui.dm) { // открытая переписка на экране — значит прочитана
+            const open = (feed()?.dms || []).find(x => x.id === ui.dm && x.net === netOf());
+            if (open?.unread) { open.unread = 0; save(); }
+        }
         const f = feed();
         const $feed = $win.find('.wf-feed');
         const scroll = $feed.scrollTop();
