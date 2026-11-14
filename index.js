@@ -1379,7 +1379,17 @@ ${[...seen.values()].slice(0, 20).map(p => `<div class="wf-ig-story ${ui.tag ===
         return out.slice(0, 8).join('\n');
     }
 
+    /** Бросок формы ответа: в мессенджерах чаще всего пишут коротко. */
+    function dmShape() {
+        const r = Math.random();
+        if (r < 0.22) return { n: 1, max: 60, text: 'одно очень короткое сообщение — пара слов, реакция, «ок», «серьёзно?», эмодзи или вопрос в ответ.' };
+        if (r < 0.55) return { n: 1, max: 180, text: 'одно сообщение, одна-две фразы.' };
+        if (r < 0.85) return { n: 2, max: 160, text: 'два коротких сообщения подряд (мысль и добивка).' };
+        return { n: 3, max: 220, text: 'до трёх сообщений подряд — персонаж завёлся и строчит; каждое всё равно короткое.' };
+    }
+
     function dmPrompt(t) {
+        t._shape ??= dmShape();
         const me = ctx().name1 || 'игрок';
         const net = { reddit: 'личный чат Reddit', twitter: 'личные сообщения Твиттера (X)', insta: 'Direct Инстаграма' }[t.net];
         const hist = t.msgs.slice(-30).map(m => `${m.from === 'me' ? me : '@' + t.handle}: ${m.text}`).join('\n');
@@ -1393,7 +1403,8 @@ ${voice ? `Что он публиковал в ленте (его голос и 
 ${hist}
 
 ## Задание
-Ты отвечаешь ТОЛЬКО за @${t.handle}. Напиши его ответ на последние сообщения ${me}. Это личка, а не публичная лента: можно быть откровеннее, грубее, флиртовать, торговаться, врать, уходить от ответа — как этот персонаж сделал бы с этим собеседником. Стиль — живой мессенджер: 1–3 коротких сообщения подряд, без описаний действий, без ремарок, без кавычек. Не пиши за ${me}.
+Ты отвечаешь ТОЛЬКО за @${t.handle}. Напиши его ответ на последние сообщения ${me}. Это личка, а не публичная лента: можно быть откровеннее, грубее, флиртовать, торговаться, врать, уходить от ответа — как этот персонаж сделал бы с этим собеседником. Стиль — живой мессенджер, без описаний действий, без ремарок, без кавычек. Не пиши за ${me}.
+ФОРМА ЭТОГО ОТВЕТА: ${t._shape.text} Длинные рассуждения в личке не пишут — это не письмо.
 Ответь ТОЛЬКО JSON: {"messages":["первое сообщение","второе (если нужно)"]}`;
     }
 
@@ -1431,10 +1442,13 @@ ${hist}
         const chatId = ctx().getCurrentChatId?.();
         dmBusy.add(t.id); render();
         try {
+            t._shape = dmShape();
             const raw = await callModel(dmSystem(t.net), dmPrompt(t), 3000, t.net);
             if (ctx().getCurrentChatId?.() !== chatId) return;
             let msgs = dmParse(raw);
-            msgs = msgs.map(m => cap(typeof m === 'string' ? m : m?.text, 600)).filter(Boolean).slice(0, 4);
+            const shape = t._shape || { n: 3, max: 220 };
+            delete t._shape;
+            msgs = msgs.map(m => cap(typeof m === 'string' ? m : m?.text, shape.max)).filter(Boolean).slice(0, shape.n);
             if (!msgs.length) throw new Error('пустой ответ');
             const base = Date.now();
             if (msgs.length > 1 || !/^\s*\{/.test(msgs[0])) { /* норм */ } else throw new Error('модель вернула битый JSON: ' + String(raw).slice(0, 120));
@@ -1445,7 +1459,7 @@ ${hist}
         } catch (e) {
             console.error('[world-feed] dm', e);
             toastr.error(errText(e), 'Сообщение не доставлено', { timeOut: 10000 });
-        } finally { dmBusy.delete(t.id); render(); }
+        } finally { delete t._shape; dmBusy.delete(t.id); render(); }
     }
 
     /** Системный промт лички: правила соцсети + запрет писать за игрока. */
