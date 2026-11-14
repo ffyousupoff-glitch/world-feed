@@ -14,7 +14,10 @@
         historyMessages: 20,
         postsMin: 3,
         postsMax: 6,
-        commentsPerPost: 3,
+        commentsPerPost: 3,     // сколько добавлять по «ещё комментарии»
+        commentsMin: 1,         // разброс комментов у новых постов
+        commentsMax: 10,
+        viralChance: 12,        // % постов-«бомб»
         maxPostChars: 500,
         maxCommentChars: 180,
         responseLength: 5000,
@@ -50,7 +53,7 @@
         // Фото: hermes — как в Hermes Images; hprofile — другой профиль Hermes Images; custom — свой адрес/ключ/модель.
         igImgConn: 'hermes', igImgProfileId: '', igImgEndpoint: '', igImgKey: '', igImgModel: '', igImgQuality: 'medium',
     };
-    const SETTINGS_VERSION = 4;
+    const SETTINGS_VERSION = 5;
 
     const ctx = () => SillyTavern.getContext();
 
@@ -68,6 +71,7 @@
             // v1 → v2: больше постов, меньше комментов, лимиты длины.
             Object.assign(s, { postsMin: 3, postsMax: 6, commentsPerPost: 3, responseLength: 5000 });
         }
+        if ((s.version || 1) < 5 && (s.responseLength || 5000) <= 5000) s.responseLength = 9000; // v5: посты-бомбы с 10 комментами
         s.version = SETTINGS_VERSION;
         for (const [k, v] of Object.entries(DEFAULTS)) if (s[k] === undefined) s[k] = v;
         return s;
@@ -312,16 +316,71 @@ ${g.chars}`;
         return `\nВАЖНО: ${names.join(' / ')} — персонаж ИГРОКА. Он не автор: никаких постов и комментариев от его лица и ников, похожих на его имена (${names.map(n => translit(n).replace(/\s+/g, '_')).join(', ')} и т.п.). Его комменты появляются в ленте только когда игрок пишет их сам.\n`;
     }
 
+    // ---------- охват: тихие посты, обычные, горячие и бомбы ----------
+
+    const REACH = {
+        quiet:  { label: 'тихий', note: 'почти никто не заметил', share: 0.6 },
+        normal: { label: 'обычный', note: 'пара реакций, кто-то согласен, кто-то нет', share: 1 },
+        hot:    { label: 'горячий', note: 'обсуждают: спор, несогласные, ветки ответов', share: 1 },
+        bomb:   { label: 'ИНФОБОМБА', note: 'разлетелся: срач, лагеря, ругань, ответы на ответы, кто-то приносит «пруфы», кто-то ратио', share: 1 },
+    };
+    // множители очков/лайков по охвату — модель сама почти всегда даёт «средние» числа
+    const REACH_SCORE = { quiet: [0, 25], normal: [15, 350], hot: [300, 3500], bomb: [4000, 60000] };
+
+    const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+
+    /** План охвата для N новых постов: бросок кубика, а не «пусть модель решит». */
+    function reachPlan(n) {
+        const s = cfg();
+        const lo = Math.max(0, Number(s.commentsMin ?? 1)), hi = Math.max(lo, Number(s.commentsMax ?? 10));
+        const bomb = Math.min(60, Math.max(0, Number(s.viralChance ?? 12))) / 100;
+        const span = hi - lo;
+        const plan = [];
+        for (let i = 0; i < n; i++) {
+            const r = Math.random();
+            const tier = r < bomb ? 'bomb' : r < bomb + 0.2 ? 'hot' : r < bomb + 0.2 + 0.3 ? 'quiet' : 'normal';
+            const band = { quiet: [0, 0.15], normal: [0.15, 0.45], hot: [0.45, 0.75], bomb: [0.8, 1] }[tier];
+            plan.push({ tier, comments: Math.max(lo, Math.round(lo + span * (band[0] + Math.random() * (band[1] - band[0])))) });
+        }
+        // хотя бы один пост живой, если их больше двух
+        if (n > 2 && !plan.some(x => x.tier === 'hot' || x.tier === 'bomb')) plan[rint(0, n - 1)] = { tier: 'hot', comments: Math.round(lo + span * 0.6) };
+        return plan;
+    }
+
+    function planText(plan, word) {
+        return plan.map((x, i) => `${i + 1}. ${REACH[x.tier].label} — ровно ${x.comments} ${word} всего (с ответами)${x.tier === 'quiet' ? '' : '; ' + REACH[x.tier].note}`).join('\n');
+    }
+
+    const DISCUSSION = `Комментарии как в настоящей соцсети, а не хор поддакивающих: люди спорят, ругаются, переходят на личности, дискутируют по существу, троллят, кто-то не понял пост, кто-то душнит, кто-то отвечает мемом, лагеря сцепляются в ветках ответов (ответ на ответ на ответ). Мнения РАЗНЫЕ. У тихих постов — пара случайных реплик.`;
+
+    /** Проставить посту охват и правдоподобные цифры. */
+    function applyReach(p, slot) {
+        if (!p) return p;
+        const tier = slot?.tier || 'normal';
+        p.reach = tier;
+        const [a, b] = REACH_SCORE[tier];
+        const base = rint(a, b);
+        p.score = base;
+        if (p.net === 'twitter') { p.retweets = Math.round(base * (tier === 'bomb' ? 0.35 : 0.15) * (0.5 + Math.random())); p.views = Math.round(base * rint(30, 90) + rint(40, 400)); }
+        // комменты: пропорционально и чуть случайно
+        const walk = l => (l || []).forEach(c => { c.score = Math.max(0, Math.round(base * (tier === 'quiet' ? 0.5 : 0.08) * Math.random() ** 2)); walk(c.replies); });
+        walk(p.comments);
+        return p;
+    }
+
     function tweetsPrompt() {
         const s = cfg();
         const f = feed();
         const recent = f.posts.filter(p => p.net === 'twitter').slice(0, 15).map(p => `- @${p.author}: ${String(p.body).slice(0, 90)}`).join('\n');
         const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3) + 2;
+        const plan = pendingPlan = reachPlan(rint(min + 1, max));
         return `${worldContext()}
 
 ${recent ? `## Уже в ленте (не повторяй)\n${recent}\n\n` : ''}## Задание
-Сгенерируй от ${min + 1} до ${max} новых твитов по свежим событиям ролевой игры. Разные голоса и форматы: инсайдер с BREAKING, стан-аккаунт, ироничный тейк, официальный аккаунт, саднпост, мем-шаблон, цитата-ратио.
-У каждого твита от 1 до ${s.commentsPerPost} ответов, ответы на ответы — редко.
+Сгенерируй РОВНО ${plan.length} новых твитов по свежим событиям ролевой игры, в этом порядке, с таким охватом:
+${planText(plan, 'ответов')}
+Разные голоса и форматы: инсайдер с BREAKING, стан-аккаунт, ироничный тейк, официальный аккаунт, саднпост, мем-шаблон, цитата-ратио. Инфобомба — самая скандальная/спорная тема.
+${DISCUSSION}
 ДЛИНА СТРОГО: твит не длиннее 280 символов (большинство 40–150), ответ не длиннее ${Math.min(200, s.maxCommentChars)} символов.
 ${imageGuidance()}
 ${playerRule()}
@@ -340,17 +399,21 @@ ${playerRule()}
         const f = feed();
         const recent = f.posts.filter(p => p.net === 'insta').slice(0, 12).map(p => `- @${p.author}: ${String(p.image?.prompt || '').slice(0, 70)} / ${String(p.body).slice(0, 50)}`).join('\n');
         const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3);
+        const plan = pendingPlan = reachPlan(rint(min, max));
         return `${worldContext()}
 ${igAppearance()}
 ${recent ? `## Уже в ленте (не повторяй кадры)\n${recent}\n\n` : ''}## Задание
-Сгенерируй от ${min} до ${max} новых постов Инстаграма по свежим событиям ролевой игры. Разные аккаунты и типы кадров: селфи, портрет от друга, еда/стол сверху, пейзаж или вид из окна, предмет крупным планом, групповое фото, «случайный» кадр, скриншот-мем недопустим (на фото нет текста).
+Сгенерируй РОВНО ${plan.length} новых постов Инстаграма по свежим событиям ролевой игры, в этом порядке, с таким охватом:
+${planText(plan, 'комментариев')}
+${DISCUSSION} В инсте ругань пассивно-агрессивная и в эмодзи, но бывает и прямая. Разные аккаунты и типы кадров: селфи, портрет от друга, еда/стол сверху, пейзаж или вид из окна, предмет крупным планом, групповое фото, «случайный» кадр, скриншот-мем недопустим (на фото нет текста).
 image_prompt ОБЯЗАТЕЛЕН для каждого поста и у каждого свой: описание ОДНОГО фото НА АНГЛИЙСКОМ, 1–3 предложения, как реально снято на телефон ЭТИМ автором (ракурс, свет, что в кадре). Фото показывает жизнь и взгляд автора поста: его работу, еду, вещи, место, его самого или его знакомых. Героев ролевой игры в кадр ставь ТОЛЬКО если пост именно про встречу с ними (и называй их тогда по имени); в большинстве постов их в кадре нет. Не копируй сцены из чата и не делай коллажей. Люди в кадре полностью и уместно одеты по ситуации, обычное телосложение, никакого фансервиса, без голых торсов. На фото НЕТ надписей, текста и интерфейса.
-У каждого поста ${s.commentsPerPost} комментариев, ответы — редко.
 ДЛИНА: подпись не длиннее ${Math.min(400, s.maxPostChars)} символов, комментарий не длиннее ${Math.min(150, s.maxCommentChars)} символов.
 ${playerRule()}
 Ответь ТОЛЬКО JSON без пояснений:
 {"posts":[{"name":"отображаемое имя","handle":"ник латиницей без @","verified":false,"location":"геометка или пусто","image_prompt":"...","body":"подпись с хэштегами","likes":число,"replies":[${TWEET_REPLY_SCHEMA}]}]}`;
     }
+
+    let pendingPlan = null;
 
     function postsPrompt(net = netOf()) {
         if (net === 'twitter') return tweetsPrompt();
@@ -359,11 +422,14 @@ ${playerRule()}
         const f = feed();
         const recent = f.posts.filter(p => p.net !== 'twitter').slice(0, 12).map(p => `- r/${p.sub}: ${p.title}`).join('\n');
         const min = Math.max(1, Number(s.postsMin) || 1), max = Math.max(min, Number(s.postsMax) || 3);
+        const plan = pendingPlan = reachPlan(rint(min, max));
         return `${worldContext()}
 
 ${recent ? `## Уже опубликовано (не повторяй темы)\n${recent}\n\n` : ''}## Задание
-Сгенерируй от ${min} до ${max} новых постов ленты по свежим событиям ролевой игры. Посты разные по формату: короткие мемы, вопросы, AITA, новости-слухи, жалобы, фото с подписью.
-У каждого поста ${s.commentsPerPost} комментариев верхнего уровня, ответы на них — редко и коротко.
+Сгенерируй РОВНО ${plan.length} новых постов ленты по свежим событиям ролевой игры, в этом порядке, с таким охватом:
+${planText(plan, 'комментариев')}
+Посты разные по формату: короткие мемы, вопросы, AITA, новости-слухи, жалобы, фото с подписью. Инфобомба — самая скандальная/спорная тема; у неё глубокие ветки ответов.
+${DISCUSSION}
 ДЛИНА СТРОГО: текст поста не длиннее ${s.maxPostChars} символов (лучше короче, многие посты — 1–2 строки или только заголовок), каждый комментарий не длиннее ${s.maxCommentChars} символов. Это соцсеть, а не летопись: никаких полотен, списков на десять пунктов и пересказов.
 ${imageGuidance()}
 ${playerRule()}
@@ -373,6 +439,12 @@ ${playerRule()}
 
     function threadToText(list, depth = 0) {
         return (list || []).map(c => `${'  '.repeat(depth)}- u/${c.author}: ${c.body}\n${threadToText(c.replies, depth + 1)}`).join('');
+    }
+
+    function moreDynamics(post) {
+        const t = post.reach || 'normal';
+        const tail = { quiet: 'Тред тихий: реплики редкие и случайные.', normal: 'Мнения разные, кто-то спорит.', hot: 'Тред горячий: спорят по существу и на личности, отвечают в ветках.', bomb: 'Тред — инфобомба: срач в разгаре, лагеря, ругань, ответы на ответы, новые люди пришли «из рекомендаций» поспорить.' }[t];
+        return `${tail} ${t === 'quiet' ? '' : 'Не все согласны друг с другом — больше половины новых реплик отвечают кому-то конкретному.'}`;
     }
 
     function moreTweetsPrompt(post) {
@@ -387,6 +459,7 @@ ${threadToText(post.comments).replace(/u\//g, '@') || '(пока нет)'}
 
 ## Задание
 Добавь ещё ${cfg().commentsPerPost} ответов (каждый не длиннее ${Math.min(200, cfg().maxCommentChars)} символов): новые люди приходят из рекомендаций, отвечают автору и друг другу (особенно на ответы @${normHandle(ctx().name1)}, если есть — ответь каждому), устраивают ратио, стан-войны или мем.
+${moreDynamics(post)}
 ${playerRule()}Ответь ТОЛЬКО JSON:
 {"new":[${TWEET_REPLY_SCHEMA}],"replies":[{"to":"точный handle автора, которому отвечают","to_text":"первые слова его ответа","comment":${TWEET_REPLY_SCHEMA}}]}`;
     }
@@ -404,6 +477,7 @@ ${threadToText(post.comments).replace(/u\//g, '@') || '(пока нет)'}
 
 ## Задание
 Добавь ещё ${cfg().commentsPerPost} комментариев (каждый не длиннее ${Math.min(150, cfg().maxCommentChars)} символов): подписчики, друзья, завистники, фанаты, боты; отвечают автору и друг другу (особенно на комменты @${normHandle(translit(ctx().name1 || ''))}, если есть — ответь каждому).
+${moreDynamics(post)}
 ${playerRule()}Ответь ТОЛЬКО JSON:
 {"new":[${TWEET_REPLY_SCHEMA}],"replies":[{"to":"точный handle автора, которому отвечают","to_text":"первые слова его коммента","comment":${TWEET_REPLY_SCHEMA}}]}`;
     }
@@ -423,6 +497,7 @@ ${threadToText(post.comments) || '(пока нет)'}
 
 ## Задание
 Добавь ещё ${cfg().commentsPerPost} комментариев (каждый не длиннее ${cfg().maxCommentChars} символов): новые люди заходят в тред, отвечают на существующие комменты (особенно на комменты u/${ctx().name1}, если есть — ответь каждому), разгоняют срач или мем.
+${moreDynamics(post)}
 ${playerRule()}Ответь ТОЛЬКО JSON:
 {"new":[${COMMENT_SCHEMA}],"replies":[{"to":"точный ник автора, которому отвечают","to_text":"первые слова его коммента","comment":${COMMENT_SCHEMA}}]}`;
     }
@@ -685,7 +760,9 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             if (ctx().getCurrentChatId?.() !== chatId) return;
             dropped = 0;
             const raw = Array.isArray(data) ? data : data.posts || data.tweets || [];
-            const posts = raw.map(net === 'twitter' ? normTweet : net === 'insta' ? normIg : normPost).filter(Boolean);
+            const plan = pendingPlan || [];
+            const norm = net === 'twitter' ? normTweet : net === 'insta' ? normIg : normPost;
+            const posts = raw.map((x, i) => applyReach(norm(x), plan[i])).filter(Boolean);
             if (net === 'insta') {
                 // Сами рисуем первые N новых постов, по одному, когда они попадают на экран.
                 const n = Math.max(0, Number(cfg().igAutoImages) || 0);
@@ -750,6 +827,8 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
                 const cm = normComment(n, aliases, tw);
                 if (cm) { post.comments.push(cm); added++; }
             }
+            if (added && post.reach !== 'quiet') post.score = Math.round((post.score || 0) * (1 + added * 0.04));
+            if (added && post.net === 'twitter') post.views = Math.round((post.views || 0) * (1 + added * 0.05));
             save();
             if (!added) toastr.info('Модель ничего не добавила.', 'Лента мира');
         } catch (e) {
@@ -1100,7 +1179,7 @@ ${voteBox(p.score, p.vote, p.id)}
   <div class="wf-p-head"><span class="wf-subicon" style="background:${avatarColor(p.sub)}">r/</span>
     <b data-sub="${esc(p.sub)}" class="wf-link">r/${esc(p.sub)}</b>
     <span class="wf-muted">Опубликовал <span class="${p.mine ? '' : 'wf-dmable'}" ${p.mine ? '' : dmAttr(p)}>u/${esc(p.author)}</span> · ${ago(p.ts)}</span></div>
-  <h3 class="wf-title">${esc(p.title)}${p.flair ? ` <span class="wf-pflair">${esc(p.flair)}</span>` : ''}</h3>
+  <h3 class="wf-title">${esc(p.title)}${p.flair ? ` <span class="wf-pflair">${esc(p.flair)}</span>` : ''}${reachBadge(p)}</h3>
   ${p.body ? `<div class="wf-p-body ${expanded ? '' : 'wf-clamp'}">${md(p.body)}</div>` : ''}
   ${isLong ? `<button class="wf-expand" data-act="expand" data-path="${p.id}">${expanded ? '▲ Свернуть пост' : '▼ Читать полностью'}</button>` : ''}
   ${imageHtml(p)}
@@ -1126,6 +1205,12 @@ ${voteBox(p.score, p.vote, p.id)}
     function twText(s) {
         return md(s).replace(/(^|[\s(>])(#[\p{L}\p{N}_]{2,40})/gu, (m, a, t) => `${a}<span class="wf-tw-link" data-tag="${esc(t.toLowerCase())}">${t}</span>`)
             .replace(/(^|[\s(>])@([A-Za-z0-9_]{2,30})/g, '$1<span class="wf-tw-link">@$2</span>');
+    }
+
+    function reachBadge(p) {
+        if (p.reach === 'bomb') return ` <span class="wf-reach bomb" title="Пост разлетелся">${p.net === 'reddit' ? '🔥 в топе r/all' : p.net === 'twitter' ? '🔥 в трендах' : '🔥 в рекомендациях'}</span>`;
+        if (p.reach === 'hot') return ' <span class="wf-reach hot" title="Активно обсуждают">⚡ обсуждают</span>';
+        return '';
     }
 
     function twHead(c) {
@@ -1161,7 +1246,7 @@ ${twAva(c.name || c.author)}
         return `<article class="wf-tweet" data-pid="${p.id}">
 ${twAva(p.name || p.author, true)}
 <div class="wf-tw-main">
-  <div class="wf-tw-head">${twHead(p)}</div>
+  <div class="wf-tw-head">${twHead(p)}${reachBadge(p)}</div>
   <div class="wf-tw-text big">${twText(p.body)}</div>
   ${imageHtml(p)}
   <div class="wf-tw-actions">
@@ -1208,7 +1293,7 @@ ${(c.replies || []).map(r => igCommentHtml(r, postId)).join('')}</div>
         const liked = p.vote > 0;
         return `<article class="wf-ig" data-pid="${p.id}">
 <div class="wf-ig-head"><span class="wf-ig-ring">${twAva(p.name || p.author)}</span>
-  <div class="wf-ig-who"><b class="${p.mine ? 'wf-me' : 'wf-dmable'}" ${p.mine ? '' : dmAttr(p)}>${esc(p.author)}</b>${p.verified ? '<span class="wf-tw-check">✓</span>' : ''}<span class="wf-muted"> · ${ago(p.ts)}</span>${p.location ? `<br><small>${esc(p.location)}</small>` : ''}</div>
+  <div class="wf-ig-who"><b class="${p.mine ? 'wf-me' : 'wf-dmable'}" ${p.mine ? '' : dmAttr(p)}>${esc(p.author)}</b>${p.verified ? '<span class="wf-tw-check">✓</span>' : ''}<span class="wf-muted"> · ${ago(p.ts)}</span>${reachBadge(p)}${p.location ? `<br><small>${esc(p.location)}</small>` : ''}</div>
   <button class="wf-ig-more" data-act="delp" data-path="${p.id}" title="Удалить пост">🗑</button></div>
 ${igImage(p)}
 <div class="wf-ig-actions">
@@ -1312,6 +1397,29 @@ ${hist}
 Ответь ТОЛЬКО JSON: {"messages":["первое сообщение","второе (если нужно)"]}`;
     }
 
+    /**
+     * Сообщения из ответа модели, даже если JSON оборван на середине
+     * (лимит токенов): вытаскиваем каждую строку из "messages":[ ... ] по отдельности.
+     */
+    function dmParse(raw) {
+        const t = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/```(?:json)?/gi, '').trim();
+        try { const j = parseJson(t); const m = Array.isArray(j) ? j : (j.messages || j.replies); if (Array.isArray(m) && m.length) return m; } catch { /* оборван — ниже */ }
+        const at = t.search(/"(?:messages|replies)"\s*:\s*\[/);
+        if (at < 0 && !/^\s*[\[{]/.test(t)) return [t]; // просто текст без JSON
+        const body = at >= 0 ? t.slice(t.indexOf('[', at) + 1) : t.replace(/^\s*[\[{]\s*/, '');
+        const out = [];
+        const re = /"((?:[^"\\]|\\.)*)("|$)/g;
+        let m;
+        while ((m = re.exec(body)) !== null) {
+            let str;
+            try { str = JSON.parse(`"${m[1].replace(/\\$/, '')}"`); } catch { str = m[1]; }
+            if (!str.trim()) continue;
+            out.push(m[2] ? str : str.replace(/\s+\S*$/, '') + '…'); // оборванная последняя — до целого слова
+            if (!m[2]) break;
+        }
+        return out;
+    }
+
     async function dmSend(text) {
         const t = (feed()?.dms || []).find(x => x.id === ui.dm);
         if (!t) return;
@@ -1323,14 +1431,13 @@ ${hist}
         const chatId = ctx().getCurrentChatId?.();
         dmBusy.add(t.id); render();
         try {
-            const raw = await callModel(dmSystem(t.net), dmPrompt(t), 1200, t.net);
+            const raw = await callModel(dmSystem(t.net), dmPrompt(t), 3000, t.net);
             if (ctx().getCurrentChatId?.() !== chatId) return;
-            let msgs = [];
-            try { const j = parseJson(raw); msgs = Array.isArray(j) ? j : (j.messages || j.replies || []); }
-            catch { msgs = [String(raw).replace(/<think>[\s\S]*?<\/think>/gi, '').trim()]; } // модель ответила просто текстом — тоже годится
+            let msgs = dmParse(raw);
             msgs = msgs.map(m => cap(typeof m === 'string' ? m : m?.text, 600)).filter(Boolean).slice(0, 4);
             if (!msgs.length) throw new Error('пустой ответ');
             const base = Date.now();
+            if (msgs.length > 1 || !/^\s*\{/.test(msgs[0])) { /* норм */ } else throw new Error('модель вернула битый JSON: ' + String(raw).slice(0, 120));
             msgs.forEach((m, i) => t.msgs.push({ from: 'them', text: m, ts: base + i }));
             t.ts = Date.now();
             if (!(isOpen && ui.dmView && ui.dm === t.id)) { t.unread = (t.unread || 0) + msgs.length; toastr.info(esc(msgs[0]).slice(0, 120), `✉ @${t.handle}`); }
@@ -1348,9 +1455,24 @@ ${hist}
 
     function dmUnreadTotal(net = netOf()) { return dmList(net).reduce((n, t) => n + (t.unread || 0), 0); }
 
+    /** Чинит сообщения, сохранённые сырым JSON до исправления. */
+    function dmRepair(t) {
+        let fixed = false;
+        for (let i = t.msgs.length - 1; i >= 0; i--) {
+            const m = t.msgs[i];
+            if (m.from !== 'them' || !/^\s*\{\s*"(messages|replies)"/.test(m.text)) continue;
+            const parts = dmParse(m.text);
+            if (!parts.length) continue;
+            t.msgs.splice(i, 1, ...parts.map((x, k) => ({ from: 'them', text: x, ts: (m.ts || Date.now()) + k })));
+            fixed = true;
+        }
+        if (fixed) save();
+    }
+
     function dmHtml() {
         const list = dmList().slice().sort((a, b) => b.ts - a.ts);
         const t = list.find(x => x.id === ui.dm);
+        if (t) dmRepair(t);
         const tw = netOf();
         const listHtml = `<div class="wf-dm-list">
   <div class="wf-dm-h"><b>${DM_NAMES[tw]}</b><button class="wf-linkbtn wf-x" data-act="dmclose" title="К ленте">✕</button></div>
@@ -1793,7 +1915,10 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
     <div class="wf-pad wf-grid">
       <label class="wf-f">Постов за раз, от<input data-s="postsMin" type="number" min="1" max="15"></label>
       <label class="wf-f">до<input data-s="postsMax" type="number" min="1" max="15"></label>
-      <label class="wf-f">Комментариев на пост<input data-s="commentsPerPost" type="number" min="0" max="20"></label>
+      <label class="wf-f">Комментариев у новых постов: от<input data-s="commentsMin" type="number" min="0" max="30"></label>
+      <label class="wf-f">до<input data-s="commentsMax" type="number" min="0" max="30"></label>
+      <label class="wf-f">Шанс поста-инфобомбы, %<input data-s="viralChance" type="number" min="0" max="60"></label>
+      <label class="wf-f">Сколько добавлять по «ещё комментарии»<input data-s="commentsPerPost" type="number" min="1" max="20"></label>
       <label class="wf-f">Макс. символов в посте<input data-s="maxPostChars" type="number" min="80" max="5000"></label>
       <label class="wf-f">Макс. символов в комменте<input data-s="maxCommentChars" type="number" min="40" max="2000"></label>
       <label class="wf-f">Длина ответа модели, токенов<input data-s="responseLength" type="number" min="500" max="32000"></label>
@@ -2049,7 +2174,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, dmOpen, dmSend, dmPrompt, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, dmParse, reachPlan, applyReach, dmOpen, dmSend, dmPrompt, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);

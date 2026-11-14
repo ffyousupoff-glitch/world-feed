@@ -420,3 +420,8 @@
 }
 .wf-dm-back { display: none; color: var(--wf-text) !important; font-size: 18px; }
 @media (max-width: 800px) { .wf-dm-back { display: inline-block; } }
+
+/* ── охват постов ── */
+.wf-reach { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px; vertical-align: middle; margin-left: 6px; white-space: nowrap; }
+.wf-reach.bomb { background: rgba(255, 69, 0, .18); color: #ff6a33; }
+.wf-reach.hot { background: rgba(255, 196, 0, .14); color: #e3b341; }
