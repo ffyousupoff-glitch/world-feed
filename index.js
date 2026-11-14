@@ -593,6 +593,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
             if (dropped) console.info(`[world-feed] убрано записей от лица персонажа игрока: ${dropped}`);
             if (!posts.length) throw new Error('в ответе нет постов');
             feed().posts.unshift(...posts);
+            if (netOf() !== net) unseen[net] += posts.length;
             save();
             if (!isOpen) setBadge(posts.length);
             toastr.success(net === 'twitter' ? `Новых твитов: ${posts.length}` : `Новых постов: ${posts.length}`, 'Лента мира');
@@ -757,6 +758,8 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
     let isOpen = false;
     const ui = { open: new Set(), expanded: new Set(), sub: '', tag: '', sort: 'new', composing: false };
 
+    const unseen = { reddit: 0, twitter: 0 }; // посты, пришедшие в фоновую вкладку
+
     function switchNet(net) {
         net = net === 'twitter' ? 'twitter' : 'reddit';
         if (cfg().net === net) return;
@@ -776,11 +779,19 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
   <div class="wf-browser">
     <div class="wf-chrome">
       <span class="wf-dots"><i></i><i></i><i></i></span>
-      <span class="wf-url"><span id="wf_url_host">https://www.reddit.world/</span><span id="wf_url_sub"></span></span>
+      <div class="wf-tabs">
+        <div class="wf-tab" data-net="reddit" title="reddit.world"><span class="wf-fav wf-fav-r">👽</span><span class="wf-tab-t">Reddit — главная мира</span><span class="wf-tab-badge"></span></div>
+        <div class="wf-tab" data-net="twitter" title="x.world"><span class="wf-fav wf-fav-x">𝕏</span><span class="wf-tab-t">Главная / X</span><span class="wf-tab-badge"></span></div>
+        <span class="wf-tab-plus" title="Новых соцсетей в этом мире пока не изобрели">+</span>
+      </div>
       <span class="wf-close" title="Закрыть">✕</span>
     </div>
+    <div class="wf-addr">
+      <span class="wf-navbtn" title="Назад">←</span><span class="wf-navbtn" title="Вперёд">→</span><span class="wf-navbtn wf-reload" title="Обновить ленту">⟳</span>
+      <span class="wf-url"><span class="wf-lock">🔒</span><span id="wf_url_host">https://www.reddit.world/</span><span id="wf_url_sub"></span></span>
+    </div>
     <div class="wf-topbar">
-      <span class="wf-nets"><button data-net="reddit" title="Reddit">👽 reddit</button><button data-net="twitter" title="Twitter / X">𝕏 twitter</button></span>
+      <span class="wf-logo"></span>
       <span class="wf-sort"></span>
       <button class="wf-compose-btn" data-act="compose">✏ Пост</button>
       <button class="wf-refresh">⟳ Обновить ленту</button>
@@ -798,7 +809,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         $win.on('click', '.wf-close', () => close());
         $win.on('click', function (e) { if (e.target === this) close(); });
         $win.on('click', '.wf-set-back button', () => toggleSettings(false));
-        $win.on('click', '.wf-refresh', refreshFeed);
+        $win.on('click', '.wf-refresh, .wf-reload', () => { if (!settingsOpen) refreshFeed(); });
         $win.on('click', '.wf-gear', () => toggleSettings());
         bindSettingsPage($win.find('.wf-settings-page'));
         $win.on('click', '[data-sort]', function () { ui.sort = this.dataset.sort; render(); });
@@ -1066,6 +1077,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
     function renderBusy() {
         if (!$win) return;
         const label = busy === 'twitter' ? 'Мир твитит…' : 'Мир пишет посты…';
+        $win.find('.wf-tab').each(function () { $(this).toggleClass('wf-loading', busy === this.dataset.net); });
         $win.find('.wf-refresh').prop('disabled', !!busy).html(busy ? `<span class="wf-spin"></span> ${label}` : '⟳ Обновить ленту');
     }
 
@@ -1079,6 +1091,14 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
         const tw = netOf() === 'twitter';
         $win.toggleClass('wf-tw', tw);
         $win.find('[data-net]').each(function () { $(this).toggleClass('on', this.dataset.net === netOf()); });
+        $win.find('.wf-logo').html(tw ? '<span class="wf-xlogo">𝕏</span>' : '<span class="wf-snoo">👽</span> <b>reddit</b><small>.world</small>');
+        $win.find('.wf-tab[data-net="reddit"] .wf-tab-t').text(ui.sub && !tw ? `r/${ui.sub}` : 'Reddit — главная мира');
+        $win.find('.wf-tab[data-net="twitter"] .wf-tab-t').text(ui.tag && tw ? `${ui.tag} — поиск / X` : 'Главная / X');
+        $win.find('.wf-tab').each(function () {
+            const n = this.dataset.net === netOf() ? 0 : (unseen[this.dataset.net] || 0);
+            $(this).find('.wf-tab-badge').text(n || '').toggle(!!n);
+        });
+        unseen[netOf()] = 0;
         $win.find('#wf_url_host').text(tw ? 'https://x.world/' : 'https://www.reddit.world/');
         $win.find('#wf_url_sub').text(tw ? (ui.tag ? `search?q=${ui.tag}` : 'home') : (ui.sub ? `r/${ui.sub}/` : ''));
         $win.find('.wf-sort').html(tw
