@@ -1088,6 +1088,7 @@ ${playerRule()}Ответь ТОЛЬКО JSON:
         $win.on('click', '[data-sub]', function () { ui.sub = this.dataset.sub; render(); $win.find('.wf-feed').scrollTop(0); });
         $win.on('click', '.wf-spoiler', function () { $(this).toggleClass('wf-shown'); });
         $win.on('click', '[data-act]', onAction);
+        $win.on('input', '.wf-dm-input', () => dmTyping());
         $win.on('keydown', '.wf-dm-input', function (e) {
             if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $win.find('[data-act="dmsend"]').trigger('click'); }
         });
@@ -1403,7 +1404,7 @@ ${voice ? `Что он публиковал в ленте (его голос и 
 ${hist}
 
 ## Задание
-Ты отвечаешь ТОЛЬКО за @${t.handle}. Напиши его ответ на последние сообщения ${me}. Это личка, а не публичная лента: можно быть откровеннее, грубее, флиртовать, торговаться, врать, уходить от ответа — как этот персонаж сделал бы с этим собеседником. Стиль — живой мессенджер, без описаний действий, без ремарок, без кавычек. Не пиши за ${me}.
+Ты отвечаешь ТОЛЬКО за @${t.handle}. Напиши его ответ на последние сообщения ${me} — если их несколько подряд, ответь на всю пачку целиком, как живой человек (можно отреагировать на одно, а другое проигнорировать). Это личка, а не публичная лента: можно быть откровеннее, грубее, флиртовать, торговаться, врать, уходить от ответа — как этот персонаж сделал бы с этим собеседником. Стиль — живой мессенджер, без описаний действий, без ремарок, без кавычек. Не пиши за ${me}.
 ФОРМА ЭТОГО ОТВЕТА: ${t._shape.text} Длинные рассуждения в личке не пишут — это не письмо.
 Ответь ТОЛЬКО JSON: {"messages":["первое сообщение","второе (если нужно)"]}`;
     }
@@ -1431,14 +1432,46 @@ ${hist}
         return out;
     }
 
-    async function dmSend(text) {
+    // Пауза перед ответом: пишешь несколько сообщений подряд — собеседник ждёт, пока допишешь.
+    const DM_WAIT = 2500;
+    const dmTimers = new Map();
+    const dmWaiting = new Set();
+
+    /** (Пере)завести таймер ответа; все ждущие промисы разрешатся, когда собеседник ответит. */
+    function dmSchedule(t, wait) {
+        clearTimeout(dmTimers.get(t.id)?.timer);
+        const waiters = dmTimers.get(t.id)?.waiters || [];
+        const timer = setTimeout(async () => {
+            dmTimers.delete(t.id);
+            await dmReply(t);
+            waiters.forEach(r => r());
+        }, wait);
+        dmTimers.set(t.id, { timer, waiters });
+        return waiters;
+    }
+
+    /** Отправить своё сообщение. Ответ — после паузы, на всю пачку сразу. */
+    function dmSend(text, { now = false } = {}) {
         const t = (feed()?.dms || []).find(x => x.id === ui.dm);
-        if (!t) return;
+        if (!t) return Promise.resolve();
         text = String(text || '').trim();
         if (text) t.msgs.push({ from: 'me', text, ts: Date.now() });
-        if (!t.msgs.length || t.msgs.at(-1).from !== 'me') return;
+        if (!t.msgs.length || t.msgs.at(-1).from !== 'me') return Promise.resolve();
         t.ts = Date.now(); save();
-        if (dmBusy.has(t.id)) { render(); return; }
+        if (dmBusy.has(t.id)) { dmWaiting.add(t.id); render(); return Promise.resolve(); } // ответит после текущего
+        const waiters = dmSchedule(t, now ? 0 : Number(cfg().dmWait ?? DM_WAIT));
+        render();
+        return new Promise(res => waiters.push(res));
+    }
+
+    /** Ты печатаешь — собеседник подождёт ещё. */
+    function dmTyping() {
+        const t = (feed()?.dms || []).find(x => x.id === ui.dm);
+        if (t && dmTimers.has(t.id)) dmSchedule(t, Number(cfg().dmWait ?? DM_WAIT));
+    }
+
+    async function dmReply(t, followUp = false) {
+        if (!t || dmBusy.has(t.id) || (!followUp && t.msgs.at(-1)?.from !== 'me')) return;
         const chatId = ctx().getCurrentChatId?.();
         dmBusy.add(t.id); render();
         try {
@@ -1459,7 +1492,11 @@ ${hist}
         } catch (e) {
             console.error('[world-feed] dm', e);
             toastr.error(errText(e), 'Сообщение не доставлено', { timeOut: 10000 });
-        } finally { delete t._shape; dmBusy.delete(t.id); render(); }
+        } finally {
+            delete t._shape; dmBusy.delete(t.id); render();
+            // пока он печатал, ты дописала ещё — он отвечает и на это
+            if (dmWaiting.delete(t.id) && ctx().getCurrentChatId?.() === chatId) await dmReply(t, true);
+        }
     }
 
     /** Системный промт лички: правила соцсети + запрет писать за игрока. */
@@ -2188,7 +2225,7 @@ ${list.map(([s, n]) => `<div class="wf-sub-item ${ui.sub === s ? 'on' : ''}" dat
                 callback: () => { open(); return ''; },
             }));
         } catch { /* без слэш-команды */ }
-        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, dmParse, reachPlan, applyReach, dmOpen, dmSend, dmPrompt, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
+        window.WorldFeed = { purgePlayer, isPlayerNick, playerAliases, morePrompt, callModel, styleRules, worldContext, toggleSettings, openSettings, listCustomModels, DEFAULT_SYSTEM_PROMPT, DEFAULT_TW_PROMPT, DEFAULT_IG_PROMPT, dmParse, dmReply, reachPlan, applyReach, dmOpen, dmSend, dmPrompt, imageCfg, textConn, igPrompt, normIg, queueDraw, tweetsPrompt, normTweet, switchNet, publishOwn, buildImagePrompt, gameImageInfo, instructionsIn, cap, postsPrompt, open, close, refreshFeed, moreComments, genImage, feed, cfg, parseJson, normPost, render };
     }
 
     $(init);
